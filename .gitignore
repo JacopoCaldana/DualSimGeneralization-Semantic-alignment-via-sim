@@ -1,0 +1,7 @@
+plots/
+results_data/
+__pycache__/
+*.png
+*.json
+venv/
+.DS_Store
