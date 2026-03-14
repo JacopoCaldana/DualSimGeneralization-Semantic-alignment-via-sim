@@ -183,16 +183,19 @@ class DualSIMoptimizerTorch(nn.Module):
     def __init__(self, sim_cpu):
         """
         PyTorch implementation of the DualSIMoptimizer.
-        Converts pre-calculated propagation matrices into Torch Tensors.
+        Uses register_buffer to ensure fixed matrices follow the model to the GPU.
         """
         super().__init__()
         self.verbose = sim_cpu.verbose
         self.L_T = sim_cpu.L_T
         self.L_R = sim_cpu.L_R
 
-        # 1. Convert fixed matrices W to Torch complexes
-        self.W_T = [torch.tensor(W, dtype=torch.complex64) for W in sim_cpu.W_TX]
-        self.W_R = [torch.tensor(W, dtype=torch.complex64) for W in sim_cpu.W_RX]
+        # 1. Register fixed matrices as BUFFERS (This is the key for GPU compatibility)
+        for i, W in enumerate(sim_cpu.W_TX):
+            self.register_buffer(f'W_T_{i}', torch.tensor(W, dtype=torch.complex64))
+        
+        for i, W in enumerate(sim_cpu.W_RX):
+            self.register_buffer(f'W_R_{i}', torch.tensor(W, dtype=torch.complex64))
 
         # 2. Trainable Parameters: phase shifts xi_T and xi_R
         self.xi_T = nn.ParameterList([
@@ -202,19 +205,27 @@ class DualSIMoptimizerTorch(nn.Module):
             nn.Parameter(torch.tensor(p, dtype=torch.float32)) for p in sim_cpu._phase_shifts_RX
         ])
 
+    def _get_W_list(self, prefix, L):
+        """Helper to retrieve registered buffers as a list."""
+        return [getattr(self, f'{prefix}_{i}') for i in range(L)]
+
     def _calculate_G_T(self):
-        """Torch implementation of Eq. 3."""
-        return self._calculate_G(self.W_T, self.xi_T, self.L_T, self.W_T[0].shape[1])
+        W_T_list = self._get_W_list('W_T', self.L_T)
+        return self._calculate_G(W_T_list, self.xi_T, self.L_T, W_T_list[0].shape[1])
 
     def _calculate_G_R(self):
-        """Torch implementation of Eq. 5."""
-        return self._calculate_G(self.W_R, self.xi_R, self.L_R, self.W_R[0].shape[1])
+        W_R_list = self._get_W_list('W_R', self.L_R)
+        return self._calculate_G(W_R_list, self.xi_R, self.L_R, W_R_list[0].shape[1])
     
     def _calculate_G(self, W_list, phases, L, input_dim):
-        device = W_list[0].device
+        # Now W_list elements are on the same device as the model automatically
+        device = phases[0].device
         G = torch.eye(input_dim, dtype=torch.complex64, device=device)
+        
         for l in range(L):
+            # Applying phase shifts
             Y_l = torch.diag(torch.exp(1j * phases[l]))
+            # Both Y_l, W_list[l] and G are now on the same device (CUDA)
             G = Y_l @ W_list[l] @ G
         return G
 
@@ -266,6 +277,17 @@ class DualSIMoptimizerTorch(nn.Module):
                 for p in self.xi_T: p.copy_(p % (2 * torch.pi))
                 for p in self.xi_R: p.copy_(p % (2 * torch.pi))
 
-            loss_history.append(loss_J_R.item())
+            current_loss=loss_J_R.item()
+            loss_history.append(current_loss)
+            if k % 50 == 0:
+                print(f"      [Iter {k:4d}/{max_iters}] Semantic Loss: {current_loss:.6f}")
+            
+        # --- CALCOLO FINALE ERRORE DI FROBENIUS ---
+        with torch.no_grad():
+            Z_final, _ = self.get_effective_cascade(H_torch)
+            beta_f = torch.sum(torch.conj(Z_final) * A_torch) / (torch.sum(torch.conj(Z_final) * Z_final) + 1e-12)
+            fro_err = torch.norm(beta_f * Z_final - A_torch) / torch.norm(A_torch)
+            print(f"   🏁 Optimization Done. Final Relative Frobenius Error: {fro_err.item():.4f}\n")
             
         return loss_history
+        

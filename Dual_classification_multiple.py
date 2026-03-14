@@ -15,7 +15,7 @@ from models_tasks.classification import Classifier
 from oracle_test import run_oracle_test
 
 # --- Experiment Execution Functions ---
-from experiment_runner import run_experiment_layers, run_experiment_snr
+from experiment_runner import run_experiment_layers, run_experiment_snr, run_experiment_1_mono_sim
 
 
 # ============================================================
@@ -27,7 +27,8 @@ np.random.seed(SEED)
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # Absolute paths for project structure
-BASE_DIR = Path('/Users/jacopocaldana/Desktop/Università/Tesi')
+#BASE_DIR = Path('/Users/jacopocaldana/Desktop/Università/Tesi')
+BASE_DIR = Path(__file__).resolve().parent
 MODEL_PATH = BASE_DIR / 'models'
 
 # Encoder names used to build the checkpoint path
@@ -46,10 +47,12 @@ print("✅ Checkpoint found. Proceeding...")
 # 2. DATA AND CLASSIFIER LOADING
 # ============================================================
 print("⏳ Loading Datamodules...")
+
+TRAIN_SIZE_PER_CLASS = 4200
 # Datamodule for Semantic Alignment (using a limited set of pilots)
 dm_align = DataModuleAlignmentClassification(
     dataset="cifar10", tx_enc=TX_NAME, rx_enc=RX_NAME,      
-    train_label_size=100, method='centroid', batch_size=128, seed=SEED
+    train_label_size=TRAIN_SIZE_PER_CLASS, method='centroid', batch_size=128, seed=SEED
 )
 dm_align.setup()
 
@@ -89,7 +92,9 @@ else:
     print(f"✅ Target matrix A calculated (Zero-Shot - PPFE)")
 
 # Real Rayleigh Fading MIMO Channel Generation (as described in Eq. 8)
-H_mimo = complex_gaussian_matrix(0, 1, size=(384, 384)).to(device)
+#H_mimo = complex_gaussian_matrix(0, 1, size=(384, 384)).to(device)
+# No Channel
+H_mimo = torch.eye(384, dtype=torch.complex64, device=device)
 
 
 # ============================================================
@@ -107,17 +112,23 @@ print(f"🎯 Baseline (Ideal A_target without channel): {oracle_acc * 100:.2f}%"
 # Decomment the experiment you wish to run
 
 # --- EXPERIMENT 1: Impact of Meta-surface Layers (L) ---
-# print("Starting Experiment 1: Layers Variation...")
-# data_layers = run_experiment_layers(
-#     A_target=A_target, H_mimo=H_mimo, dm_task=dm_task, clf=clf, 
-#     L_in=L_in, mu_in=mu_in, L_out=L_out, mu_out=mu_out, device=device
-# )
+print("Starting Experiment 1: Layers Variation...")
+data_layers = run_experiment_layers(
+     A_target=A_target, H_mimo=H_mimo, dm_task=dm_task, clf=clf, 
+     L_in=L_in, mu_in=mu_in, L_out=L_out, mu_out=mu_out, device=device
+ )
 
 # --- EXPERIMENT 2: Impact of Signal-to-Noise Ratio (SNR) ---
-print("\n🚀 Starting Experiment 2: SNR Sweep...")
-data_snr = run_experiment_snr(
-    A_target=A_target, H_mimo=H_mimo, dm_task=dm_task, clf=clf, 
-    L_in=L_in, mu_in=mu_in, L_out=L_out, mu_out=mu_out, device=device
-)
+#print("\n Starting Experiment 2: SNR Sweep...")
+#data_snr = run_experiment_snr(
+ #   A_target=A_target, H_mimo=H_mimo, dm_task=dm_task, clf=clf, 
+  #  L_in=L_in, mu_in=mu_in, L_out=L_out, mu_out=mu_out, device=device
+#)
 
-print("\n🎉 All active experiments have been completed!")
+
+
+#print("\n Starting Mono-SIM Ablation Study...")
+#data_mono = run_experiment_1_mono_sim(
+ #   A_target=A_target, dm_task=dm_task, clf=clf, 
+  #  L_in=L_in, mu_in=mu_in, L_out=L_out, mu_out=mu_out, device=device
+#)

@@ -17,7 +17,7 @@ from download_utils import download_models_ckpt
 from inference import run_evaluation, run_evaluation_mmse
 from models_tasks.classification import Classifier
 from oracle_test import run_oracle_test
-from experiment_runner import run_experiment_layers, run_experiment_snr
+from experiment_runner import run_experiment_layers, run_experiment_snr, run_experiment_1_mono_sim
 
 
 # ============================================================
@@ -31,7 +31,8 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"🚀 Compute device activated: {device}")
 
 # Absolute paths to avoid ambiguity
-BASE_DIR = Path('/Users/jacopocaldana/Desktop/Università/Tesi')
+#BASE_DIR = Path('/Users/jacopocaldana/Desktop/Università/Tesi')
+BASE_DIR = Path(__file__).resolve().parent
 MODEL_PATH = BASE_DIR / 'models'
 
 # Encoder names to construct the checkpoint path
