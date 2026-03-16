@@ -15,7 +15,7 @@ from models_tasks.classification import Classifier
 from oracle_test import run_oracle_test
 
 # --- Experiment Execution Functions ---
-from experiment_runner import run_experiment_layers, run_experiment_snr, run_experiment_1_mono_sim
+from experiment_runner import run_experiment_layers, run_experiment_snr, run_experiment_1_mono_sim, run_sim_configuration_asymmetric,run_experiment_rx_depth,run_experiment_tx_depth
 
 
 # ============================================================
@@ -132,3 +132,20 @@ data_layers = run_experiment_layers(
  #   A_target=A_target, dm_task=dm_task, clf=clf, 
   #  L_in=L_in, mu_in=mu_in, L_out=L_out, mu_out=mu_out, device=device
 #)
+
+
+# --- Lancio dell'esperimento RX variable---
+#print("Starting Asymmetric experiment..")
+#data_asym = run_experiment_rx_depth(
+ #   A_target=A_target,H_mimo=H_mimo, dm_task=dm_task, clf=clf, 
+  #  L_in=L_in, mu_in=mu_in, L_out=L_out, mu_out=mu_out, 
+   # device=device
+#)
+
+# --- Lancio dell'esperimento TX variable---
+#print("Starting Asymmetric experiment..")
+#data_tx_var = run_experiment_tx_depth(
+ #   A_target=A_target, H_mimo=H_mimo, dm_task=dm_task, clf=clf, 
+  #  L_in=L_in, mu_in=mu_in, L_out=L_out, mu_out=mu_out, 
+   # device=device
+#) 

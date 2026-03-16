@@ -57,7 +57,7 @@ def plot_and_save_loss(loss_history, filename="loss_plot.png", title="Convergenc
 def run_sim_configuration(
     L, M_int, A_target, H_mimo, snr_list, 
     dm_task, clf, L_in, mu_in, L_out, mu_out, device, 
-    max_iters=500, lr=0.1
+    max_iters=2000, lr=0.05
 ):
     """
     Trains and evaluates a specific Dual-SIM physical configuration.
@@ -150,7 +150,7 @@ def run_experiment_layers(A_target, H_mimo, dm_task, clf, L_in, mu_in, L_out, mu
                 L=L, M_int=M_int, A_target=A_target, H_mimo=H_mimo, 
                 snr_list=snr_eval, dm_task=dm_task, clf=clf, 
                 L_in=L_in, mu_in=mu_in, L_out=L_out, mu_out=mu_out, 
-                device=device, max_iters=500
+                device=device, max_iters=1000
             )
             
             # Save the result for this specific combination
@@ -301,3 +301,140 @@ def run_experiment_1_mono_sim(A_target, dm_task, clf, L_in, mu_in, L_out, mu_out
             json.dump(results_mono, f, indent=4)
             
     return results_mono
+
+
+
+
+  #############################################################################
+
+PLOT_DIR = BASE_DIR / "plots"
+PLOT_DIR.mkdir(parents=True, exist_ok=True)
+
+def run_sim_configuration_asymmetric(
+    L_TX, L_RX, M_int, A_target, H_mimo, snr_list, 
+    dm_task, clf, L_in, mu_in, L_out, mu_out, device, 
+    max_iters=500, lr=0.1
+):
+    """
+    Funzione universale per valutare Dual-SIM con qualsiasi numero di layer.
+    """
+    # Parametri fisici fissi
+    wavelength = 0.005 
+    slayer = 5 * wavelength 
+    dx = wavelength / 2 
+
+    # Inizializzazione Fisica Asimmetrica
+    sim_cpu = DualSIMoptimizer(
+        num_layers_TX=L_TX, 
+        num_meta_atoms_TX_int_x=M_int, num_meta_atoms_TX_int_y=M_int,
+        num_meta_atoms_TX_in_x=16, num_meta_atoms_TX_in_y=12,
+        num_meta_atoms_TX_out_x=24, num_meta_atoms_TX_out_y=16,
+        
+        num_layers_RX=L_RX,
+        num_meta_atoms_RX_int_x=M_int, num_meta_atoms_RX_int_y=M_int,
+        num_meta_atoms_RX_in_x=24, num_meta_atoms_RX_in_y=16,
+        num_meta_atoms_RX_out_x=24, num_meta_atoms_RX_out_y=16,
+        
+        wavelength=wavelength,
+        spacings={'tx_in': dx, 'tx_out': dx, 'tx_int': dx, 'rx_in': dx, 'rx_out': dx, 'rx_int': dx},
+        verbose=False 
+    )
+
+    model = DualSIMoptimizerTorch(sim_cpu).to(device)
+
+    # Ottimizzazione con LR variabile
+    # Assicurati che optimize_alternating accetti 'lr' come parametro
+    loss_history = model.optimize_alternating(
+        A_target=A_target, H_mimo=H_mimo, 
+        max_iters=max_iters, lr=lr
+    )
+
+    # Salvataggio Plot di Convergenza (Nome file Universale)
+    plot_filename = PLOT_DIR / f"loss_LTX{L_TX}_LRX{L_RX}_M{M_int}.png"
+    plot_and_save_loss(loss_history, filename=plot_filename, title=f"TX={L_TX}, RX={L_RX} (LR={lr})")
+
+    # Valutazione finale
+    with torch.no_grad():
+        Z_final, _ = model.get_effective_cascade(H_mimo)
+        # Calcolo del fattore di scala ottimale beta
+        beta_opt = torch.sum(torch.conj(Z_final) * A_target) / (torch.sum(torch.conj(Z_final) * Z_final) + 1e-12)
+
+    results = {}
+    for snr in snr_list:
+        acc = run_evaluation(model, dm_task.test_dataloader(), H_mimo, snr, beta_opt, L_in, mu_in, L_out, mu_out, clf, device)
+        results["Inf" if snr is None else str(snr)] = acc * 100
+
+    return results, loss_history
+
+
+def run_experiment_rx_depth(A_target, H_mimo, dm_task, clf, L_in, mu_in, L_out, mu_out, device):
+    """
+    ESPERIMENTO: TX Fisso (10) vs RX Variabile.
+    Salva in: results_rx_depth_study.json
+    """
+    print("\n" + "="*50)
+    print("🚀 STARTING RX-DEPTH STUDY (Fixed TX=10)")
+    print("="*50)
+    
+    L_TX_fixed = 10
+    rx_layers_list = [1, 2, 5, 10, 15, 20]
+    M_int = 32
+    snr_eval = [None]
+    lr_custom = 0.05 # LR ridotto per convergenza profonda
+
+    results_rx = {}
+
+    for L_RX in rx_layers_list:
+        print(f"\n🔄 Config: L_TX={L_TX_fixed} | L_RX={L_RX} | LR={lr_custom}")
+        iters = 500 if L_RX <= 10 else 1000
+        
+        acc_dict, _ = run_sim_configuration_asymmetric(
+            L_TX=L_TX_fixed, L_RX=L_RX, M_int=M_int, 
+            A_target=A_target, H_mimo=H_mimo, 
+            snr_list=snr_eval, dm_task=dm_task, clf=clf, 
+            L_in=L_in, mu_in=mu_in, L_out=L_out, mu_out=mu_out, 
+            device=device, max_iters=iters, lr=lr_custom
+        )
+        
+        results_rx[str(L_RX)] = acc_dict["Inf"]
+        with open(BASE_DIR / "results_rx_depth_study.json", "w") as f:
+            json.dump(results_rx, f, indent=4)
+            
+    return results_rx
+
+def run_experiment_tx_depth(A_target, H_mimo, dm_task, clf, L_in, mu_in, L_out, mu_out, device):
+    """
+    ESPERIMENTO: RX Fisso (10) vs TX Variabile.
+    Salva in: results_asymmetric_tx_study.json
+    """
+    print("\n" + "!"*60)
+    print("💎 STARTING TX-DEPTH STUDY (Fixed RX=10)")
+    print("!"*60)
+
+    L_RX_fixed = 10
+    tx_layers_list = [2, 5, 10, 15, 20]
+    M_int = 32
+    snr_eval = [None]
+    lr_custom = 0.05
+
+    results_tx = {}
+
+    for L_TX in tx_layers_list:
+        print(f"\n🧪 Config: L_TX={L_TX} | L_RX={L_RX_fixed} | LR={lr_custom}")
+        iters = 500 if L_TX <= 10 else 1000
+        
+        acc_dict, _ = run_sim_configuration_asymmetric(
+            L_TX=L_TX, L_RX=L_RX_fixed, M_int=M_int,
+            A_target=A_target, H_mimo=H_mimo,
+            snr_list=snr_eval, dm_task=dm_task, clf=clf,
+            L_in=L_in, mu_in=mu_in, L_out=L_out, mu_out=mu_out,
+            device=device, max_iters=iters, lr=lr_custom
+        )
+        
+        results_tx[str(L_TX)] = acc_dict["Inf"]
+        with open(BASE_DIR / "results_asymmetric_tx_study.json", "w") as f:
+            json.dump(results_tx, f, indent=4)
+
+    return results_tx
+
+
