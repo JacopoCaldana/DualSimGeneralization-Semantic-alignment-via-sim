@@ -5,7 +5,7 @@ from pathlib import Path
 
 # --- Local Modules Import ---
 from dualsim import DualSIMoptimizer, DualSIMoptimizerTorch
-from inference import run_evaluation
+from inference import run_evaluation, run_evaluation_disjoint
 
 import matplotlib.pyplot as plt
 from pathlib import Path
@@ -57,7 +57,7 @@ def plot_and_save_loss(loss_history, filename="loss_plot.png", title="Convergenc
 def run_sim_configuration(
     L, M_int, A_target, H_mimo, snr_list, 
     dm_task, clf, L_in, mu_in, L_out, mu_out, device, 
-    max_iters=2000, lr=0.05
+    max_iters=3000, lr=0.1
 ):
     """
     Trains and evaluates a specific Dual-SIM physical configuration.
@@ -123,26 +123,23 @@ def run_sim_configuration(
 
     return results, loss_history
 
-def run_experiment_layers(A_target, H_mimo, dm_task, clf, L_in, mu_in, L_out, mu_out, device):
+def run_experiment_layers(A_target, H_mimo, dm_task, clf, L_in, mu_in, L_out, mu_out, device, strategy_name="Linear"):
     """
     EXPERIMENT 1: Accuracy vs Number of SIM Layers (L).
-    Evaluates how the depth of the metasurface affects semantic alignment.
+    Salvataggio differenziato per strategia (Linear/PPFE).
     """
     print("\n" + "="*50)
-    print("🚀 STARTING EXPERIMENT 1: ACCURACY vs LAYERS (L)")
+    print(f"🚀 STARTING EXPERIMENT 1: ACCURACY vs LAYERS (L) | Strategy: {strategy_name}")
     print("="*50)
     
-    # Experiment parameters
     layer_list = [2, 5, 10, 15, 20, 25]
     atoms_list = [16, 32] 
-    snr_eval = [None]  # None represents infinite SNR (noise-free)
+    snr_eval = [None]
     
-    # Results dictionary
     results_layers = {}
 
     for M_int in atoms_list:
         results_layers[f"{M_int}x{M_int}"] = {}
-        
         for L in layer_list:
             print(f"\n🔄 Testing Config: {M_int}x{M_int} Meta-atoms | L = {L} Layers")
             
@@ -150,47 +147,44 @@ def run_experiment_layers(A_target, H_mimo, dm_task, clf, L_in, mu_in, L_out, mu
                 L=L, M_int=M_int, A_target=A_target, H_mimo=H_mimo, 
                 snr_list=snr_eval, dm_task=dm_task, clf=clf, 
                 L_in=L_in, mu_in=mu_in, L_out=L_out, mu_out=mu_out, 
-                device=device, max_iters=1000
+                device=device, max_iters=3000
             )
             
-            # Save the result for this specific combination
             acc_val = acc_dict["Inf"]
             results_layers[f"{M_int}x{M_int}"][str(L)] = acc_val
             print(f"✅ Result: Accuracy = {acc_val:.2f}%")
             
-            # Incremental save to prevent data loss in case of interruption
-            with open(BASE_DIR / "results_exp_layers.json", "w") as f:
+            # --- SALVATAGGIO DINAMICO ---
+            filename = BASE_DIR / f"results_layers_{strategy_name}.json"
+            with open(filename, "w") as f:
                 json.dump(results_layers, f, indent=4)
                 
-    print("\n🎯 EXPERIMENT 1 COMPLETED! Data saved to results_exp_layers.json")
+    print(f"\n🎯 EXPERIMENT 1 COMPLETED! Data saved to {filename.name}")
     return results_layers
 
-def run_experiment_snr(A_target, H_mimo, dm_task, clf, L_in, mu_in, L_out, mu_out, device):
+def run_experiment_snr(A_target, H_mimo, dm_task, clf, L_in, mu_in, L_out, mu_out, device, strategy_name="Linear"):
     """
     EXPERIMENT 2: Accuracy vs Signal-to-Noise Ratio (SNR).
-    Evaluates the robustness of the Dual-SIM system under different noise conditions.
+    Salvataggio differenziato per strategia (Linear/PPFE).
     """
     print("\n" + "="*50)
-    print("🚀 STARTING EXPERIMENT 2: ACCURACY vs SNR")
+    print(f"🚀 STARTING EXPERIMENT 2: ACCURACY vs SNR | Strategy: {strategy_name}")
     print("="*50)
     
-    # Experiment parameters
-    L_fixed = 10
+    L_fixed = 5
     atoms_list = [16, 32]
     snr_list = [-30, -20, -10, 0, 10, 20, 30]
     
-    # Results dictionary
     results_snr = {}
 
     for M_int in atoms_list:
         print(f"\n🔄 Testing Config: {M_int}x{M_int} Meta-atoms | L = {L_fixed} (Fixed)")
         
-        # Train once per configuration and evaluate across the entire SNR range
         acc_dict, _ = run_sim_configuration(
             L=L_fixed, M_int=M_int, A_target=A_target, H_mimo=H_mimo, 
             snr_list=snr_list, dm_task=dm_task, clf=clf, 
             L_in=L_in, mu_in=mu_in, L_out=L_out, mu_out=mu_out, 
-            device=device, max_iters=500
+            device=device, max_iters=1000
         )
         
         results_snr[f"{M_int}x{M_int}"] = acc_dict
@@ -198,15 +192,13 @@ def run_experiment_snr(A_target, H_mimo, dm_task, clf, L_in, mu_in, L_out, mu_ou
         for snr_val, acc_val in acc_dict.items():
             print(f"  - SNR {snr_val:>3} dB : {acc_val:.2f}%")
             
-        # Incremental save
-        with open(BASE_DIR / "results_exp_snr.json", "w") as f:
+        # --- SALVATAGGIO DINAMICO ---
+        filename = BASE_DIR / f"results_snr_{strategy_name}.json"
+        with open(filename, "w") as f:
             json.dump(results_snr, f, indent=4)
             
-    print("\n🎯 EXPERIMENT 2 COMPLETED! Data saved to results_exp_snr.json")
+    print(f"\n🎯 EXPERIMENT 2 COMPLETED! Data saved to {filename.name}")
     return results_snr
-
-
-from utils import a_inv_times_b, complex_compressed_tensor, decompress_complex_tensor
 
 def run_experiment_1_mono_sim(A_target, dm_task, clf, L_in, mu_in, L_out, mu_out, device):
     """
@@ -305,7 +297,9 @@ def run_experiment_1_mono_sim(A_target, dm_task, clf, L_in, mu_in, L_out, mu_out
 
 
 
-  #############################################################################
+  ########################################################################################################
+  ############# ASYMMETRIC EXPERIMENTS###############
+  ##################################################################
 
 PLOT_DIR = BASE_DIR / "plots"
 PLOT_DIR.mkdir(parents=True, exist_ok=True)
@@ -438,3 +432,170 @@ def run_experiment_tx_depth(A_target, H_mimo, dm_task, clf, L_in, mu_in, L_out, 
     return results_tx
 
 
+###################################################################################
+######### DISJOINT EXPERIMENTS ########################
+####################################################
+
+def plot_disjoint_losses(loss_T, loss_R, filename="loss_disjoint.png", title="Disjoint Optimization"):
+    """Plots both TX and RX losses for the Disjoint architecture."""
+    if not loss_T or not loss_R:
+        return
+
+    plt.style.use('seaborn-v0_8-whitegrid')
+    plt.figure(figsize=(10, 6))
+    
+    plt.plot(loss_T, color='tab:blue', linewidth=1.5, label='TX Semantic Loss (vs A)')
+    plt.plot(loss_R, color='tab:orange', linewidth=1.5, label='RX Channel Eq Loss (vs Q)')
+    
+    plt.title(title, pad=15, fontsize=14)
+    plt.xlabel('Iteration', fontsize=12)
+    plt.ylabel('Loss (log scale)', fontsize=12)
+    plt.yscale('log')
+    plt.grid(True, linestyle=':', alpha=0.6)
+    plt.legend()
+    
+    plt.savefig(filename, dpi=300, bbox_inches='tight')
+    plt.close()
+    print(f"✅ Disjoint convergence plot saved to: {filename}")
+
+
+def run_sim_configuration_disjoint(
+    L, M_int, A_target, H_mimo, test_snr, 
+    dm_task, clf, L_in, mu_in, L_out, mu_out, device, 
+    max_iters=1000, lr=0.1
+):
+    """
+    Trains and evaluates a Dual-SIM configuration using Disjoint Optimization.
+    NOTE: Evaluates only ONE specific SNR at a time because the RX target (MMSE) 
+    depends on the specific noise variance.
+    """
+    wavelength = 0.005 
+    slayer = 5 * wavelength 
+    dx = wavelength / 2 
+
+    # 1. Inizializzazione Fisica
+    sim_cpu = DualSIMoptimizer(
+        num_layers_TX=L, 
+        num_meta_atoms_TX_in_x=16, num_meta_atoms_TX_in_y=12,
+        num_meta_atoms_TX_out_x=24, num_meta_atoms_TX_out_y=16,
+        num_meta_atoms_TX_int_x=M_int, num_meta_atoms_TX_int_y=M_int,  
+        thickness_TX=slayer * L,
+        
+        num_layers_RX=L,
+        num_meta_atoms_RX_in_x=24, num_meta_atoms_RX_in_y=16,
+        num_meta_atoms_RX_out_x=24, num_meta_atoms_RX_out_y=16,
+        num_meta_atoms_RX_int_x=M_int, num_meta_atoms_RX_int_y=M_int,
+        thickness_RX=slayer * L,
+        
+        wavelength=wavelength,
+        spacings={'tx_in': dx, 'tx_out': dx, 'tx_int': dx, 'rx_in': dx, 'rx_out': dx, 'rx_int': dx},
+        verbose=False 
+    )
+
+    model = DualSIMoptimizerTorch(sim_cpu).to(device)
+
+    # 2. Calcolo della varianza del rumore per l'MMSE (Q)
+    # Assumiamo potenza del segnale normalizzata a 1 per la creazione del target Q.
+    # Se test_snr è None (Infinito), usiamo un epsilon minuscolo per evitare divisioni per zero.
+    if test_snr is None:
+        noise_var = 1e-9
+    else:
+        noise_var = 10 ** (-test_snr / 10)
+
+    # 3. Disjoint Optimization
+    loss_T, loss_R, beta_product = model.optimize_disjoint(
+        A_target=A_target, H_mimo=H_mimo, noise_var=noise_var,
+        max_iters=max_iters, lr=lr, lambda_reg=1e-4
+    )
+
+    # Plot delle due loss
+    plot_filename = BASE_DIR / f"loss_disjoint_L{L}_M{M_int}_SNR{test_snr}.png"
+    plot_title = f"Disjoint Opt: L={L}, Atoms={M_int}x{M_int}, SNR={test_snr}dB"
+    plot_disjoint_losses(loss_T, loss_R, filename=plot_filename, title=plot_title)
+
+    # 4. Evaluation
+    acc = run_evaluation_disjoint(
+        model=model, dataloader=dm_task.test_dataloader(), 
+        H_mimo=H_mimo, snr_db=test_snr, beta_product=beta_product, 
+        L_in=L_in, mu_in=mu_in, L_out=L_out, mu_out=mu_out, 
+        clf=clf, device=device
+    )
+    
+    return acc * 100
+
+
+def run_experiment_layers_disjoint(A_target, H_mimo, dm_task, clf, L_in, mu_in, L_out, mu_out, device):
+    """
+    DISJOINT EXPERIMENT 1: Accuracy vs Number of SIM Layers (L).
+    No noise case (SNR = None).
+    """
+    print("\n" + "="*50)
+    print("🧩 STARTING DISJOINT EXPERIMENT 1: ACCURACY vs LAYERS (L)")
+    print("="*50)
+    
+    layer_list = [2, 5, 10, 15, 20]
+    atoms_list = [16, 32] 
+    
+    results_layers = {}
+
+    for M_int in atoms_list:
+        results_layers[f"{M_int}x{M_int}"] = {}
+        
+        for L in layer_list:
+            print(f"\n🔄 Testing Disjoint Config: {M_int}x{M_int} Meta-atoms | L = {L} Layers")
+            
+            acc_val = run_sim_configuration_disjoint(
+                L=L, M_int=M_int, A_target=A_target, H_mimo=H_mimo, 
+                test_snr=None, dm_task=dm_task, clf=clf, 
+                L_in=L_in, mu_in=mu_in, L_out=L_out, mu_out=mu_out, 
+                device=device, max_iters=1000, lr=0.1
+            )
+            
+            results_layers[f"{M_int}x{M_int}"][str(L)] = acc_val
+            print(f"✅ Disjoint Result: Accuracy = {acc_val:.2f}%")
+            
+            with open(BASE_DIR / "results_disjoint_layers.json", "w") as f:
+                json.dump(results_layers, f, indent=4)
+                
+    print("\n🎯 DISJOINT EXP 1 COMPLETED! Saved to results_disjoint_layers.json")
+    return results_layers
+
+
+def run_experiment_snr_disjoint(A_target, H_mimo, dm_task, clf, L_in, mu_in, L_out, mu_out, device):
+    """
+    DISJOINT EXPERIMENT 2: Accuracy vs SNR.
+    Unlike alternating opt, here we MUST retrain the SIM for each SNR step 
+    because the target MMSE matrix Q changes with the noise variance.
+    """
+    print("\n" + "="*50)
+    print("🧩 STARTING DISJOINT EXPERIMENT 2: ACCURACY vs SNR")
+    print("="*50)
+    
+    L_fixed = 10
+    atoms_list = [16, 32]
+    snr_list = [-10, 0, 10, 20, 30] # Ho accorciato leggermente la lista per velocizzare
+    
+    results_snr = {}
+
+    for M_int in atoms_list:
+        results_snr[f"{M_int}x{M_int}"] = {}
+        print(f"\n🔄 Testing Disjoint Config: {M_int}x{M_int} Meta-atoms | L = {L_fixed}")
+        
+        for snr in snr_list:
+            print(f"   📉 Training Disjoint SIM specifically for SNR = {snr} dB")
+            
+            acc_val = run_sim_configuration_disjoint(
+                L=L_fixed, M_int=M_int, A_target=A_target, H_mimo=H_mimo, 
+                test_snr=snr, dm_task=dm_task, clf=clf, 
+                L_in=L_in, mu_in=mu_in, L_out=L_out, mu_out=mu_out, 
+                device=device, max_iters=1000, lr=0.1
+            )
+            
+            results_snr[f"{M_int}x{M_int}"][str(snr)] = acc_val
+            print(f"   ✅ Disjoint Result (SNR {snr}): {acc_val:.2f}%")
+            
+            with open(BASE_DIR / "results_disjoint_snr.json", "w") as f:
+                json.dump(results_snr, f, indent=4)
+            
+    print("\n🎯 DISJOINT EXP 2 COMPLETED! Saved to results_disjoint_snr.json")
+    return results_snr        

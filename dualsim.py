@@ -251,6 +251,14 @@ class DualSIMoptimizerTorch(nn.Module):
         Z = GR @ H @ GT
         return Z, GR
 
+    def get_TX_cascade(self):
+        """Restituisce la matrice di propagazione G_T della SIM Trasmettitore."""
+        return self._calculate_G_T()
+
+    def get_RX_cascade(self):
+        """Restituisce la matrice di propagazione G_R della SIM Ricevitore."""
+        return self._calculate_G_R()    
+
     #def optimize_alternating(self, A_target, H_mimo, max_iters, lr=0.1, lambda_reg=1e-4):
         """
         Alternating Optimization Algorithm with explicit Beta calculation.
@@ -308,7 +316,7 @@ class DualSIMoptimizerTorch(nn.Module):
         #return loss_history
 
 
-    def optimize_alternating(self, A_target, H_mimo, max_iters, lr=0.05, lambda_reg=1e-4):
+    def optimize_alternating(self, A_target, H_mimo, max_iters, lr=0.1, lambda_reg=1e-4):
         """
         Alternating Optimization Algorithm (Projected Gradient Descent).
         Segue rigorosamente le equazioni del paper:
@@ -321,7 +329,7 @@ class DualSIMoptimizerTorch(nn.Module):
         A_torch = torch.as_tensor(A_target, dtype=torch.complex64)
         H_torch = torch.as_tensor(H_mimo, dtype=torch.complex64)
         
-        # Gradient Descent PURO (SGD con momentum=0) 
+        # Gradient Descent PURO (SGD) 
         opt_T = optim.SGD(self.xi_T.parameters(), lr=lr)
         opt_R = optim.SGD(self.xi_R.parameters(), lr=lr)
         
@@ -387,7 +395,98 @@ class DualSIMoptimizerTorch(nn.Module):
             
         return loss_history    
       
+    def optimize_disjoint(self, A_target, H_mimo, noise_var, max_iters, lr=0.1, lambda_reg=1e-4):
+        """
+        True Disjoint Optimization (Separation Principle).
+        - TX punta ad A (Allineamento Semantico)
+        - RX punta a I (Diagonalizzazione del Canale: G_R * H \approx I)
+        """
+        import torch.optim as optim
+        
+        A_torch = torch.as_tensor(A_target, dtype=torch.complex64)
+        H_torch = torch.as_tensor(H_mimo, dtype=torch.complex64)
+        
+        # --- NUOVO TARGET RX: MATRICE IDENTITA' ---
+        # Vogliamo che il canale equivalente G_R * H diventi trasparente (Identity)
+        I_target = torch.eye(H_torch.shape[1], dtype=torch.complex64, device=H_torch.device)
 
+        opt_T = optim.Adam(self.xi_T.parameters(), lr=lr)
+        opt_R = optim.Adam(self.xi_R.parameters(), lr=lr)
+        
+        loss_history_T = []
+        loss_history_R = []
+
+        for k in range(max_iters):
+            
+            # ==========================================
+            # 1. TX SIM: Allineamento Semantico (Identico a Mono-SIM)
+            # ==========================================
+            opt_T.zero_grad()
+            G_T = self.get_TX_cascade() 
+            
+            with torch.no_grad():
+                beta_t = torch.sum(torch.conj(G_T) * A_torch) / (torch.sum(torch.conj(G_T) * G_T) + 1e-12)
+            
+            loss_T = torch.norm(beta_t * G_T - A_torch, p='fro')**2
+            loss_T.backward()
+            opt_T.step()
+
+            # ==========================================
+            # 2. RX SIM: Inversione / Diagonalizzazione del Canale
+            # Vogliamo che (G_R * H) sia proporzionale a I
+            # ==========================================
+            opt_R.zero_grad()
+            G_R = self.get_RX_cascade() 
+            H_eq = G_R @ H_torch # Canale Equivalente
+            
+            # Calcolo di beta_r rispetto all'Identità
+            with torch.no_grad():
+                beta_r = torch.sum(torch.conj(H_eq) * I_target) / (torch.sum(torch.conj(H_eq) * H_eq) + 1e-12)
+            
+            # Loss RX: Quanto il canale equivalente è lontano dall'identità perfetta
+            loss_R = torch.norm(beta_r * H_eq - I_target, p='fro')**2
+            
+            # Regolarizzazione: Evitare che G_R amplifichi il rumore
+            total_loss_R = loss_R + lambda_reg * torch.norm(G_R, p='fro')**2
+            
+            total_loss_R.backward()
+            opt_R.step()
+
+            # ==========================================
+            # 3. Proiezione per entrambe le SIM
+            # ==========================================
+            with torch.no_grad():
+                for p in self.xi_T: p.copy_(p % (2 * torch.pi))
+                for p in self.xi_R: p.copy_(p % (2 * torch.pi))
+                
+            loss_history_T.append(loss_T.item())
+            loss_history_R.append(loss_R.item())
+            
+            if k % 50 == 0:
+                print(f"      [Iter {k:4d}/{max_iters}] Loss TX (A): {loss_T.item():.2f} | Loss RX (H->I): {loss_R.item():.2f}")
+
+        # --- CALCOLI FINALI PER INFERENZA ---
+        with torch.no_grad():
+            G_T_final = self.get_TX_cascade()
+            G_R_final = self.get_RX_cascade()
+            
+            # Beta per TX (rispetto ad A)
+            beta_t_final = torch.sum(torch.conj(G_T_final) * A_torch) / (torch.sum(torch.conj(G_T_final) * G_T_final) + 1e-12)
+            
+            # Beta per RX (rispetto a I)
+            H_eq_final = G_R_final @ H_torch
+            beta_r_final = torch.sum(torch.conj(H_eq_final) * I_target) / (torch.sum(torch.conj(H_eq_final) * H_eq_final) + 1e-12)
+            
+            # Errore combinato finale: Z = (beta_r * G_R) * H * (beta_t * G_T)
+            # Se RX ha funzionato: (beta_r * G_R * H) ≈ I
+            # Se TX ha funzionato: (beta_t * G_T) ≈ A
+            # Allora Z_totale ≈ I * A = A
+            Z_final = H_eq_final @ G_T_final
+            fro_err = torch.norm((beta_t_final * beta_r_final) * Z_final - A_torch) / torch.norm(A_torch)
+            print(f"   🏁 Disjoint Opt Done. Final Combined Error: {fro_err.item():.4f}\n")
+
+        # Restituire il prodotto dei beta per l'inferenza
+        return loss_history_T, loss_history_R, (beta_t_final * beta_r_final)
 
 
       

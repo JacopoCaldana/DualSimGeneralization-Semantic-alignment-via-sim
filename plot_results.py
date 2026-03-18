@@ -70,75 +70,110 @@ def plot_exp_layers():
     print("✅ Grafico Layers salvato.")
 
 
-def plot_accuracy_vs_layers():
-    """Genera il grafico Accuratezza vs Numero di Layer (Simile a Fig. 2 del paper)."""
-    json_path = BASE_DIR / "results_exp_layers.json"
-    if not json_path.exists():
-        print("❓ File 'results_exp_layers.json' non trovato. Salto questo grafico.")
-        return
-
-    with open(json_path, "r") as f:
-        results = json.load(f)
-
-    plt.figure(figsize=(10, 6))
-    # Definiamo colori e marker per distinguere le configurazioni di atomi
-    configs = {"16x16": ('tab:blue', 'o'), "32x32": ('tab:orange', 's'), "64x64": ('tab:green', '^')}
-
-    for label, (color, marker) in configs.items():
-        if label in results:
-            data = results[label]
-            # Ordiniamo i layer (le chiavi JSON sono stringhe)
-            layers = sorted([int(l) for l in data.keys()])
-            accs = [data[str(l)] for l in layers]
-            plt.plot(layers, accs, label=f'Meta-atoms {label}', color=color, marker=marker, linestyle='-')
-
-    plt.title('Accuracy vs Number of SIM Layers ($L$)', pad=15)
-    plt.xlabel('SIM Layers ($L$)')
-    plt.ylabel('Downstream Classification Accuracy (%)')
-    plt.ylim(0, 100)
-    plt.legend(loc='lower right', frameon=True)
-    plt.grid(True, linestyle='--', alpha=0.7)
+def plot_comparison_layers():
+    """Confronta Linear vs PPFE nello stesso grafico (Accuracy vs Layers)."""
+    strategies = ["Linear", "PPFE"]
+    configs = {"16x16": ('tab:blue', 'o'), "32x32": ('tab:orange', 's')}
     
-    plt.savefig(BASE_DIR / "plot_exp_layers.png", dpi=300, bbox_inches='tight')
-    print("✅ Grafico 'Accuracy vs Layers' salvato.")
+    plt.figure(figsize=(11, 7))
 
-def plot_accuracy_vs_snr():
-    """Genera il grafico Accuratezza vs SNR (Simile a Fig. 3 del paper)."""
-    json_path = BASE_DIR / "results_exp_snr.json"
-    if not json_path.exists():
-        print("❓ File 'results_exp_snr.json' non trovato. Salto questo grafico.")
-        return
+    for strategy in strategies:
+        json_path = BASE_DIR / f"results_layers_{strategy}.json"
+        if not json_path.exists():
+            print(f"⚠️ File {json_path.name} non trovato. Salto...")
+            continue
 
-    with open(json_path, "r") as f:
-        results = json.load(f)
+        with open(json_path, "r") as f:
+            results = json.load(f)
 
-    plt.figure(figsize=(10, 6))
-    configs = {"16x16": ('tab:blue', 'o'), "32x32": ('tab:orange', 's'), "64x64": ('tab:green', '^')}
+        # Stile linea: continuo per Linear, tratteggiato per PPFE
+        line_style = '-' if strategy == "Linear" else '--'
+        alpha_val = 1.0 if strategy == "Linear" else 0.7
 
-    for label, (color, marker) in configs.items():
-        if label in results:
-            data = results[label]
-            # Gestione SNR: filtriamo "Inf" per il plot dell'asse X e lo teniamo per una linea
-            snrs_numeric = sorted([int(s) for s in data.keys() if s != "Inf"])
-            accs = [data[str(s)] for s in snrs_numeric]
-            
-            line = plt.plot(snrs_numeric, accs, label=f'Meta-atoms {label}', color=color, marker=marker)
-            
-            # Se esiste il dato per SNR infinito, disegniamo un punto orizzontale tratteggiato alla fine
-            if "Inf" in data:
-                plt.axhline(y=data["Inf"], color=color, linestyle='--', alpha=0.5)
+        for label, (color, marker) in configs.items():
+            if label in results:
+                data = results[label]
+                layers = sorted([int(l) for l in data.keys()])
+                accs = [data[str(l)] for l in layers]
+                
+                plt.plot(layers, accs, 
+                         label=f'{label} ({strategy})', 
+                         color=color, 
+                         marker=marker, 
+                         ls=line_style, 
+                         alpha=alpha_val,
+                         linewidth=2.5)
 
-    plt.title('Accuracy vs Signal-to-Noise Ratio (SNR)', pad=15)
-    plt.xlabel('SNR [dB]')
-    plt.ylabel('Downstream Classification Accuracy (%)')
+    plt.axhline(y=95.58, color='black', linestyle=':', alpha=0.5, label='Oracle (95.58%)')
+    
+    plt.title('Strategy Comparison: Accuracy vs SIM Layers ($L$)', fontsize=15, pad=20)
+    plt.xlabel('Number of SIM Layers ($L$)', fontsize=12)
+    plt.ylabel('Top-1 Accuracy (%)', fontsize=12)
     plt.ylim(0, 100)
-    plt.legend(loc='lower right', frameon=True)
-    plt.grid(True, linestyle='--', alpha=0.7)
+    plt.grid(True, linestyle=':', alpha=0.6)
+    
+    # Legenda su due colonne per non coprire il grafico
+    plt.legend(loc='lower right', ncol=2, frameon=True, shadow=True, fontsize=10)
+    
+    save_path = BASE_DIR / "plot_comparison_layers_final.png"
+    plt.savefig(save_path, dpi=300, bbox_inches='tight')
+    plt.close()
+    print(f"✅ Plot confronto Layers salvato: {save_path.name}")
 
-    plt.savefig(BASE_DIR / "plot_exp_snr.png", dpi=300, bbox_inches='tight')
-    print("✅ Grafico 'Accuracy vs SNR' salvato.")    
+
+def plot_comparison_snr():
+    """Confronta Linear vs PPFE nello stesso grafico (Accuracy vs SNR)."""
+    strategies = ["Linear", "PPFE"]
+    configs = {"16x16": ('tab:blue', 'o'), "32x32": ('tab:orange', 's')}
+    
+    plt.figure(figsize=(11, 7))
+
+    for strategy in strategies:
+        json_path = BASE_DIR / f"results_snr_{strategy}.json"
+        if not json_path.exists():
+            print(f"⚠️ File {json_path.name} non trovato. Salto...")
+            continue
+
+        with open(json_path, "r") as f:
+            results = json.load(f)
+
+        line_style = '-' if strategy == "Linear" else '--'
+        alpha_val = 1.0 if strategy == "Linear" else 0.7
+
+        for label, (color, marker) in configs.items():
+            if label in results:
+                data = results[label]
+                snrs_numeric = sorted([int(s) for s in data.keys() if s != "Inf"])
+                accs = [data[str(s)] for s in snrs_numeric]
+                
+                plt.plot(snrs_numeric, accs, 
+                         label=f'{label} ({strategy})', 
+                         color=color, 
+                         marker=marker, 
+                         ls=line_style, 
+                         alpha=alpha_val,
+                         linewidth=2.5)
+                
+                # Plot asintoto SNR Infinito (solo per Linear per non sporcare troppo)
+                if "Inf" in data and strategy == "Linear":
+                    plt.axhline(y=data["Inf"], color=color, linestyle=':', alpha=0.3)
+
+    plt.title('Strategy Comparison: Accuracy vs SNR [dB]', fontsize=15, pad=20)
+    plt.xlabel('SNR [dB]', fontsize=12)
+    plt.ylabel('Top-1 Accuracy (%)', fontsize=12)
+    plt.ylim(0, 100)
+    plt.grid(True, linestyle=':', alpha=0.6)
+    
+    plt.legend(loc='lower right', ncol=2, frameon=True, shadow=True, fontsize=10)
+    
+    save_path = BASE_DIR / "plot_comparison_snr_final.png"
+    plt.savefig(save_path, dpi=300, bbox_inches='tight')
+    plt.close()
+    print(f"✅ Plot confronto SNR salvato: {save_path.name}")   
 
 ######################################################################################################################################
+######## ASYMETRIC STUDY##############################
+########################################################################
 
 def plot_asymmetric_rx_study():
     """
@@ -326,17 +361,110 @@ def plot_full_comparison():
     
     print(f"✅ Plot salvato correttamente in: {save_path}")
 
+####################################################################################################################
+######### DISJOINT OPT STUDY  ########################
+###################################################################
 
 
+def plot_accuracy_vs_layers_disjoint():
+    """
+    Genera il grafico Accuratezza vs Numero di Layer per l'architettura Disjoint.
+    Legge dal file: results_disjoint_layers.json
+    """
+    json_path = BASE_DIR / "results_disjoint_layers.json"
+    if not json_path.exists():
+        print(f"❓ File '{json_path.name}' non trovato. Salto questo grafico.")
+        return
+
+    with open(json_path, "r") as f:
+        results = json.load(f)
+
+    plt.figure(figsize=(10, 6))
+    # Colori distinti per l'architettura Disjoint (es. Viola e Rosso) per non confonderli con quelli Alternati
+    configs = {"16x16": ('tab:purple', 'o'), "32x32": ('tab:red', 's'), "64x64": ('tab:brown', '^')}
+
+    for label, (color, marker) in configs.items():
+        if label in results:
+            data = results[label]
+            layers = sorted([int(l) for l in data.keys()])
+            accs = [data[str(l)] for l in layers]
+            plt.plot(layers, accs, label=f'Disjoint {label}', color=color, marker=marker, linestyle='-', linewidth=2)
+
+    # Aggiunta linea Oracle se la conosci (es. 95.58%)
+    plt.axhline(y=95.58, color='black', linestyle=':', alpha=0.6, label='Oracle Baseline (95.58%)')
+
+    plt.title('Disjoint Architecture: Accuracy vs Number of SIM Layers ($L$)', pad=15, fontsize=14)
+    plt.xlabel('SIM Layers ($L$)', fontsize=12)
+    plt.ylabel('Downstream Classification Accuracy (%)', fontsize=12)
+    plt.ylim(0, 100)
+    
+    # Mostra solo i tick dei layer effettivamente testati per pulizia
+    if results and list(results.keys()):
+        first_key = list(results.keys())[0]
+        plt.xticks(sorted([int(l) for l in results[first_key].keys()]))
+
+    plt.legend(loc='lower right', frameon=True, shadow=True)
+    plt.grid(True, linestyle='--', alpha=0.7)
+    
+    save_path = PLOT_DIR / "plot_disjoint_layers.png"
+    plt.savefig(save_path, dpi=300, bbox_inches='tight')
+    plt.close()
+    print(f"✅ Grafico 'Disjoint: Accuracy vs Layers' salvato in: {save_path.name}")
+
+
+def plot_accuracy_vs_snr_disjoint():
+    """
+    Genera il grafico Accuratezza vs SNR per l'architettura Disjoint.
+    Legge dal file: results_disjoint_snr.json
+    """
+    json_path = BASE_DIR / "results_disjoint_snr.json"
+    if not json_path.exists():
+        print(f"❓ File '{json_path.name}' non trovato. Salto questo grafico.")
+        return
+
+    with open(json_path, "r") as f:
+        results = json.load(f)
+
+    plt.figure(figsize=(10, 6))
+    configs = {"16x16": ('tab:purple', 'o'), "32x32": ('tab:red', 's'), "64x64": ('tab:brown', '^')}
+
+    for label, (color, marker) in configs.items():
+        if label in results:
+            data = results[label]
+            # Filtra "Inf" se presente, altrimenti plotta i valori numerici
+            snrs_numeric = sorted([int(s) for s in data.keys() if s != "Inf"])
+            accs = [data[str(s)] for s in snrs_numeric]
+            
+            plt.plot(snrs_numeric, accs, label=f'Disjoint {label} (L=5)', color=color, marker=marker, linewidth=2)
+            
+            # Linea tratteggiata per SNR Infinito (senza rumore) se il dato esiste
+            if "Inf" in data:
+                plt.axhline(y=data["Inf"], color=color, linestyle='--', alpha=0.5, label=f'No Noise limit ({label})')
+
+    plt.title('Disjoint Architecture: Accuracy vs SNR (Dynamic RX Re-training)', pad=15, fontsize=14)
+    plt.xlabel('Signal-to-Noise Ratio (dB)', fontsize=12)
+    plt.ylabel('Downstream Classification Accuracy (%)', fontsize=12)
+    plt.ylim(0, 100)
+    plt.legend(loc='lower right', frameon=True, shadow=True)
+    plt.grid(True, linestyle='--', alpha=0.7)
+
+    save_path = PLOT_DIR / "plot_disjoint_snr.png"
+    plt.savefig(save_path, dpi=300, bbox_inches='tight')
+    plt.close()
+    print(f"✅ Grafico 'Disjoint: Accuracy vs SNR' salvato in: {save_path.name}")
+
+################################################################################################################################
 
 if __name__ == "__main__":
     # Puoi inserire qui il valore dell'Oracle che ti ha stampato il terminale
     # Esempio: plot_ablation_mono(oracle_acc=95.4)
     plot_ablation_mono(oracle_acc=90.0) 
     plot_exp_layers()
-    plot_accuracy_vs_layers()
-    plot_accuracy_vs_snr()
+    plot_comparison_layers()
+    plot_comparison_snr()
     plot_asymmetric_rx_study()
     plot_asymmetric_tx_study()
     plot_full_comparison()
+    plot_accuracy_vs_layers_disjoint()
+    plot_accuracy_vs_snr_disjoint()
 
