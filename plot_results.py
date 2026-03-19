@@ -364,14 +364,14 @@ def plot_full_comparison():
 ####################################################################################################################
 ######### DISJOINT OPT STUDY  ########################
 ###################################################################
-
-
-def plot_accuracy_vs_layers_disjoint():
+def plot_accuracy_vs_layers_disjoint(strategy_name="Linear"):
     """
     Genera il grafico Accuratezza vs Numero di Layer per l'architettura Disjoint.
-    Legge dal file: results_disjoint_layers.json
+    Legge dal file: results_disjoint_layers_{strategy_name}.json
     """
-    json_path = BASE_DIR / "results_disjoint_layers.json"
+    # Nomenclatura aggiornata per includere la strategia
+    json_path = BASE_DIR / f"results_disjoint_layers_{strategy_name}.json"
+    
     if not json_path.exists():
         print(f"❓ File '{json_path.name}' non trovato. Salto questo grafico.")
         return
@@ -380,7 +380,7 @@ def plot_accuracy_vs_layers_disjoint():
         results = json.load(f)
 
     plt.figure(figsize=(10, 6))
-    # Colori distinti per l'architettura Disjoint (es. Viola e Rosso) per non confonderli con quelli Alternati
+    # Colori distinti per l'architettura Disjoint
     configs = {"16x16": ('tab:purple', 'o'), "32x32": ('tab:red', 's'), "64x64": ('tab:brown', '^')}
 
     for label, (color, marker) in configs.items():
@@ -390,10 +390,10 @@ def plot_accuracy_vs_layers_disjoint():
             accs = [data[str(l)] for l in layers]
             plt.plot(layers, accs, label=f'Disjoint {label}', color=color, marker=marker, linestyle='-', linewidth=2)
 
-    # Aggiunta linea Oracle se la conosci (es. 95.58%)
+    # Aggiunta linea Oracle fissa
     plt.axhline(y=95.58, color='black', linestyle=':', alpha=0.6, label='Oracle Baseline (95.58%)')
 
-    plt.title('Disjoint Architecture: Accuracy vs Number of SIM Layers ($L$)', pad=15, fontsize=14)
+    plt.title(f'Disjoint Architecture: Accuracy vs SIM Layers ($L$) - {strategy_name}', pad=15, fontsize=14)
     plt.xlabel('SIM Layers ($L$)', fontsize=12)
     plt.ylabel('Downstream Classification Accuracy (%)', fontsize=12)
     plt.ylim(0, 100)
@@ -406,18 +406,21 @@ def plot_accuracy_vs_layers_disjoint():
     plt.legend(loc='lower right', frameon=True, shadow=True)
     plt.grid(True, linestyle='--', alpha=0.7)
     
-    save_path = PLOT_DIR / "plot_disjoint_layers.png"
+    # Salvataggio dinamico
+    save_path = BASE_DIR / f"plot_disjoint_layers_{strategy_name}.png"
     plt.savefig(save_path, dpi=300, bbox_inches='tight')
     plt.close()
     print(f"✅ Grafico 'Disjoint: Accuracy vs Layers' salvato in: {save_path.name}")
 
 
-def plot_accuracy_vs_snr_disjoint():
+def plot_accuracy_vs_snr_disjoint(strategy_name="Linear"):
     """
     Genera il grafico Accuratezza vs SNR per l'architettura Disjoint.
-    Legge dal file: results_disjoint_snr.json
+    Legge dal file: results_disjoint_snr_{strategy_name}.json
     """
-    json_path = BASE_DIR / "results_disjoint_snr.json"
+    # Nomenclatura aggiornata per includere la strategia
+    json_path = BASE_DIR / f"results_disjoint_snr_{strategy_name}.json"
+    
     if not json_path.exists():
         print(f"❓ File '{json_path.name}' non trovato. Salto questo grafico.")
         return
@@ -441,19 +444,53 @@ def plot_accuracy_vs_snr_disjoint():
             if "Inf" in data:
                 plt.axhline(y=data["Inf"], color=color, linestyle='--', alpha=0.5, label=f'No Noise limit ({label})')
 
-    plt.title('Disjoint Architecture: Accuracy vs SNR (Dynamic RX Re-training)', pad=15, fontsize=14)
+    plt.title(f'Disjoint Architecture: Accuracy vs SNR - {strategy_name}', pad=15, fontsize=14)
     plt.xlabel('Signal-to-Noise Ratio (dB)', fontsize=12)
     plt.ylabel('Downstream Classification Accuracy (%)', fontsize=12)
     plt.ylim(0, 100)
-    plt.legend(loc='lower right', frameon=True, shadow=True)
+    
+    # Legenda disposta su due colonne se ci sono troppe voci
+    plt.legend(loc='lower right', frameon=True, shadow=True, ncol=1 if len(configs) < 3 else 2, fontsize='small')
     plt.grid(True, linestyle='--', alpha=0.7)
 
-    save_path = PLOT_DIR / "plot_disjoint_snr.png"
+    # Salvataggio dinamico
+    save_path = BASE_DIR / f"plot_disjoint_snr_{strategy_name}.png"
     plt.savefig(save_path, dpi=300, bbox_inches='tight')
     plt.close()
     print(f"✅ Grafico 'Disjoint: Accuracy vs SNR' salvato in: {save_path.name}")
 
 ################################################################################################################################
+
+def plot_depth_lr_comparison(strategy_name="PPFE"):
+    """Crea una griglia di grafici per confrontare i LR a diverse profondità."""
+    json_path = BASE_DIR / f"grid_search_L_vs_LR_{strategy_name}.json"
+    if not json_path.exists(): return
+
+    with open(json_path, "r") as f:
+        data = json.load(f)
+
+    depths = list(data.keys())
+    fig, axes = plt.subplots(1, len(depths), figsize=(18, 5), sharey=True)
+    
+    for i, L_key in enumerate(depths):
+        ax = axes[i]
+        for lr, metrics in data[L_key].items():
+            ax.plot(metrics["loss_history"], label=f"LR={lr}")
+        
+        ax.set_title(f"Depth {L_key} (M=16x16)")
+        ax.set_yscale('log')
+        ax.set_xlabel("Iteration")
+        if i == 0: ax.set_ylabel("Semantic Loss")
+        ax.legend(fontsize='small')
+        ax.grid(True, linestyle=':', alpha=0.6)
+
+    plt.suptitle(f"Grid Search Results: How Depth affects LR sensitivity ({strategy_name})", fontsize=16)
+    plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+    plt.savefig(BASE_DIR / f"plot_grid_search_L_vs_LR_{strategy_name}.png", dpi=300)
+    print(f"✅ Grafico Cross-Grid salvato.")
+
+#####################################################################
+#####################################################################    
 
 if __name__ == "__main__":
     # Puoi inserire qui il valore dell'Oracle che ti ha stampato il terminale
@@ -465,6 +502,12 @@ if __name__ == "__main__":
     plot_asymmetric_rx_study()
     plot_asymmetric_tx_study()
     plot_full_comparison()
-    plot_accuracy_vs_layers_disjoint()
-    plot_accuracy_vs_snr_disjoint()
+    plot_accuracy_vs_layers_disjoint(strategy_name="Linear")
+    plot_accuracy_vs_snr_disjoint(strategy_name="Linear")
+    plot_accuracy_vs_layers_disjoint(strategy_name="PPFE")
+    plot_accuracy_vs_snr_disjoint(strategy_name="PPFE")
+    plot_depth_lr_comparison()
+
+
+
 
