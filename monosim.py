@@ -96,8 +96,10 @@ class MonoSIMoptimizer:
 
 
 
+
+
 class MonoSIMoptimizerTorch(nn.Module):
-    def __init__(self, sim_cpu: MonoSIMoptimizer):
+    def __init__(self, sim_cpu):
         super().__init__()
         self.verbose = sim_cpu.verbose
         self.L = sim_cpu.L
@@ -113,54 +115,44 @@ class MonoSIMoptimizerTorch(nn.Module):
         ])
 
     def get_cascade(self):
-        """Restituisce la matrice G (Eq. 3 o 5 in base a chi la istanzia)."""
         device = self.xi[0].device
         G = torch.eye(self.input_dim, dtype=torch.complex64, device=device)
-        
         for l in range(self.L):
             W_l = getattr(self, f'W_{l}')
             Y_l = torch.diag(torch.exp(1j * self.xi[l]))
             G = Y_l @ W_l @ G
         return G
 
-    def optimize_sim(self, target_matrix, max_iters=500, lr=0.1, lambda_reg=0.0):
+    def optimize_sim(self, target_matrix, max_iters=5000, lr=0.05, lambda_reg=0.0):
         """
-        Ottimizza in isolamento la singola SIM verso un target specifico.
-        TX userà target = A. RX userà target = Q.
+        Ottimizzazione TX usando Adam per gestire la profondità dei layer.
         """
-        Target_torch = torch.as_tensor(target_matrix, dtype=torch.complex64)
-        opt = optim.SGD(self.xi.parameters(), lr=lr)
+        # Fix per il warning PyTorch
+        if isinstance(target_matrix, torch.Tensor):
+            Target_torch = target_matrix.clone().detach().to(self.xi[0].device).to(torch.complex64)
+        else:
+            Target_torch = torch.tensor(target_matrix, dtype=torch.complex64, device=self.xi[0].device)
+        
+        opt = optim.Adam(self.xi.parameters(), lr=lr)
         loss_history = []
 
         for k in range(max_iters):
-            # 1. Closed-form update for beta
             with torch.no_grad():
                 G_k = self.get_cascade()
                 num_beta = torch.sum(torch.conj(G_k) * Target_torch)
                 den_beta = torch.sum(torch.conj(G_k) * G_k) + 1e-12
                 beta_k = num_beta / den_beta
 
-            # 2. Ottimizzazione delle fasi
             opt.zero_grad()
             G_current = self.get_cascade()
             
-            # Loss di Frobenius (più eventuale regolarizzazione per amplificazione rumore su RX)
             loss = torch.norm(beta_k * G_current - Target_torch, p='fro')**2
             if lambda_reg > 0:
                 loss += lambda_reg * torch.norm(G_current, p='fro')**2
                 
             loss.backward()
-            
-            # Trucco di stabilità: Normalizzazione del gradiente
-            with torch.no_grad():
-                for p in self.xi:
-                    if p.grad is not None:
-                        grad_norm = torch.norm(p.grad) + 1e-12
-                        p.grad /= grad_norm 
-            
-            opt.step()
+            opt.step() # NESSUNA normalizzazione manuale, lasciamo lavorare Adam
 
-            # Proiezione [0, 2pi)
             with torch.no_grad():
                 for p in self.xi: 
                     p.copy_(p % (2 * torch.pi))
@@ -168,14 +160,63 @@ class MonoSIMoptimizerTorch(nn.Module):
             current_loss = loss.item()
             loss_history.append(current_loss)
             
-            if self.verbose and k % 50 == 0:
-                print(f"   [Iter {k:4d}/{max_iters}] Loss: {current_loss:.6f} | Beta: {torch.abs(beta_k).item():.2e}")
+            if k % 500 == 0:
+                print(f"      [Iter {k:4d}/{max_iters}] Loss: {current_loss:.4e} | Beta Mag: {torch.abs(beta_k).item():.2e}")
             
         with torch.no_grad():
             G_final = self.get_cascade()
             beta_f = torch.sum(torch.conj(G_final) * Target_torch) / (torch.sum(torch.conj(G_final) * G_final) + 1e-12)
             fro_err = torch.norm(beta_f * G_final - Target_torch) / (torch.norm(Target_torch) + 1e-12)
-            if self.verbose:
-                print(f"🏁 Optimization Done. Final Relative Error: {fro_err.item():.4f}\n")
+            print(f"   🏁 Optimization Done. Final Relative Error: {fro_err.item():.4f}\n")
             
-        return loss_history, beta_f.item()        
+        return loss_history, beta_f.item()
+
+
+    def optimize_rx_sequential(self, H_eff, A_target, max_iters=5000, lr=0.05, lambda_reg=1e-4):
+        """
+        Ottimizzazione Sequenziale RX usando Adam. Essenziale per L > 10.
+        """
+        # Fix per il warning PyTorch
+        if isinstance(H_eff, torch.Tensor):
+            H_eff_torch = H_eff.clone().detach().to(self.xi[0].device).to(torch.complex64)
+        else:
+            H_eff_torch = torch.tensor(H_eff, dtype=torch.complex64, device=self.xi[0].device)
+            
+        if isinstance(A_target, torch.Tensor):
+            A_torch = A_target.clone().detach().to(self.xi[0].device).to(torch.complex64)
+        else:
+            A_torch = torch.tensor(A_target, dtype=torch.complex64, device=self.xi[0].device)
+
+        opt = optim.Adam(self.xi.parameters(), lr=lr)
+        loss_history = []
+
+        for k in range(max_iters):
+            with torch.no_grad():
+                G_R = self.get_cascade()
+                Z = G_R @ H_eff_torch
+                num_beta = torch.sum(torch.conj(Z) * A_torch)
+                den_beta = torch.sum(torch.conj(Z) * Z) + 1e-12
+                beta_k = num_beta / den_beta
+
+            opt.zero_grad()
+            G_R = self.get_cascade()
+            Z_current = G_R @ H_eff_torch
+            
+            loss = torch.norm(beta_k * Z_current - A_torch, p='fro')**2
+            if lambda_reg > 0:
+                loss += lambda_reg * torch.norm(G_R, p='fro')**2
+
+            loss.backward()
+            opt.step() # Adam fa la magia qui
+
+            with torch.no_grad():
+                for p in self.xi:
+                    p.copy_(p % (2 * torch.pi))
+
+            current_loss = loss.item()
+            loss_history.append(current_loss)
+
+            if k % 500 == 0:
+                print(f"      [Iter {k:4d}/{max_iters}] Eq. Loss: {current_loss:.4e} | Beta Mag: {torch.abs(beta_k).item():.2e}")
+
+        return loss_history, beta_k.item()

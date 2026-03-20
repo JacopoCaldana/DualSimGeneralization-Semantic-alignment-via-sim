@@ -92,9 +92,9 @@ else:
     print(f"✅ Target matrix A calculated (Zero-Shot - PPFE)")
 
 # Real Rayleigh Fading MIMO Channel Generation (as described in Eq. 8)
-H_mimo = complex_gaussian_matrix(0, 1, size=(384, 384)).to(device)
+#H_mimo = complex_gaussian_matrix(0, 1, size=(384, 384)).to(device)
 # ----No Channel---
-#H_mimo = torch.eye(384, dtype=torch.complex64, device=device)
+H_mimo = torch.eye(384, dtype=torch.complex64, device=device)
 
 
 # ============================================================

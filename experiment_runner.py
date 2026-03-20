@@ -480,73 +480,53 @@ def run_sim_configuration_disjoint(
     dm_task, clf, L_in, mu_in, L_out, mu_out, device, 
     max_iters=5000, lr=0.1
 ):
-    """
-    Trains and evaluates a Disjoint Dual-SIM setup.
-    TX performs Semantic Alignment, RX performs Channel Equalization.
-    Includes Global Beta Recalibration to fix scale drift and ensure fair comparison.
-    """
-    wavelength = 0.005  # 5mm (60 GHz)
+    wavelength = 0.005  
     slayer = 5 * wavelength 
     dx = wavelength / 2 
 
-    # --- 1. Inizializzazione Fisica INDIPENDENTE ---
-    # TX-SIM: Input semantico -> Antenne TX
     tx_sim_cpu = MonoSIMoptimizer(
-        num_layers=L, 
-        num_meta_atoms_in_x=16, num_meta_atoms_in_y=12,
-        num_meta_atoms_out_x=24, num_meta_atoms_out_y=16, # N_T = 384
+        num_layers=L, num_meta_atoms_in_x=16, num_meta_atoms_in_y=12,
+        num_meta_atoms_out_x=24, num_meta_atoms_out_y=16, 
         num_meta_atoms_int_x=M_int, num_meta_atoms_int_y=M_int,  
-        thickness=slayer * L,
-        wavelength=wavelength, spacings={'in': dx, 'out': dx, 'int': dx}, verbose=False 
+        thickness=slayer * L, wavelength=wavelength, spacings={'in': dx, 'out': dx, 'int': dx}, verbose=False 
     )
 
-    # RX-SIM: Antenne RX -> Output semantico
     rx_sim_cpu = MonoSIMoptimizer(
-        num_layers=L,
-        num_meta_atoms_in_x=24, num_meta_atoms_in_y=16,   # N_R = 384
+        num_layers=L, num_meta_atoms_in_x=24, num_meta_atoms_in_y=16,   
         num_meta_atoms_out_x=24, num_meta_atoms_out_y=16, 
         num_meta_atoms_int_x=M_int, num_meta_atoms_int_y=M_int,
-        thickness=slayer * L,
-        wavelength=wavelength, spacings={'in': dx, 'out': dx, 'int': dx}, verbose=False 
+        thickness=slayer * L, wavelength=wavelength, spacings={'in': dx, 'out': dx, 'int': dx}, verbose=False 
     )
 
-    # Convert to PyTorch Models
     tx_model = MonoSIMoptimizerTorch(tx_sim_cpu).to(device)
     rx_model = MonoSIMoptimizerTorch(rx_sim_cpu).to(device)
 
-    # --- 2. Ottimizzazione TX (Semantic Alignment) ---
+    # --- 1. OTTIMIZZAZIONE TX ---
     print("   -> Optimizing TX-SIM (Semantic Target)...")
-    loss_history_tx, _ = tx_model.optimize_sim(
-        target_matrix=A_target, max_iters=max_iters, lr=lr
-    )
+    loss_history_tx, _ = tx_model.optimize_sim(target_matrix=A_target, max_iters=max_iters, lr=lr)
 
-    # --- 3. Ottimizzazione RX (Channel Equalization) ---
-    print("   -> Optimizing RX-SIM (Zero-Forcing Target)...")
-    # Generiamo il target ZF (snr_db=None) usando la funzione basata su SVD
-    Q_target = get_rx_equalizer(H_mimo, snr_db=None).to(device)
-    
-    loss_history_rx, _ = rx_model.optimize_sim(
-        target_matrix=Q_target, max_iters=max_iters, lr=lr, lambda_reg=1e-4
-    )
-
-    # --- CHECK CONVERGENCE (Plottiamo entrambe le loss) ---
-    plot_filename_tx = BASE_DIR / f"loss_plot_TX_L{L}_M{M_int}.png"
-    plot_filename_rx = BASE_DIR / f"loss_plot_RX_L{L}_M{M_int}.png"
-    
-    plot_and_save_loss(loss_history_tx, filename=plot_filename_tx, title=f"TX Convergence (L={L}, M={M_int})")
-    plot_and_save_loss(loss_history_rx, filename=plot_filename_rx, title=f"RX Convergence (L={L}, M={M_int})")
-
-    # --- 3.5 RICALIBRAZIONE DEL BETA GLOBALE (La vera fix) ---
-    # Calcoliamo il beta ottimale sull'intera cascata esatta, 
-    # garantendo che la scala sia perfetta per il de-whitening.
+    # --- 2. OTTIMIZZAZIONE RX (SEQUENZIALE) ---
+    print("   -> Optimizing RX-SIM (Sequential Recovery)...")
+    # Il TX viene congelato e propaga il segnale nel canale
     with torch.no_grad():
-        G_T_opt = tx_model.get_cascade()
-        G_R_opt = rx_model.get_cascade()
-        Z_final = G_R_opt @ H_mimo @ G_T_opt
-        
-        beta_global = torch.sum(torch.conj(Z_final) * A_target) / (torch.sum(torch.conj(Z_final) * Z_final) + 1e-12)
+        G_T_opt = tx_model.get_cascade().cpu().numpy()
+        H_eff = H_mimo.cpu().numpy() @ G_T_opt
 
-    # --- 4. Evaluation across all SNR levels ---
+    # La RX-SIM viene addestrata per recuperare 'A' guardando il canale distorto
+    loss_history_rx, _ = rx_model.optimize_rx_sequential(
+        H_eff=H_eff, A_target=A_target, max_iters=max_iters, lr=lr, lambda_reg=1e-4
+    )
+
+    # --- 3. RICALIBRAZIONE GLOBALE DEL BETA ---
+    with torch.no_grad():
+        G_R_opt = rx_model.get_cascade().cpu().numpy()
+        Z_final = G_R_opt @ H_mimo.cpu().numpy() @ G_T_opt
+        
+        Z_torch = torch.tensor(Z_final, dtype=torch.complex64, device=device).clone().detach()
+        A_torch = torch.tensor(A_target, dtype=torch.complex64, device=device).clone().detach()
+        beta_global = torch.sum(torch.conj(Z_torch) * A_torch) / (torch.sum(torch.conj(Z_torch) * Z_torch) + 1e-12)
+
+    # --- 4. EVALUATION ---
     results = {}
     for snr in snr_list:
         acc = run_evaluation_disjoint_fixed(
@@ -558,7 +538,6 @@ def run_sim_configuration_disjoint(
         snr_key = "Inf" if snr is None else str(snr)
         results[snr_key] = acc * 100
 
-    # Ritorniamo i risultati e le loss per debug
     return results, loss_history_tx, loss_history_rx
 
 

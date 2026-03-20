@@ -364,13 +364,12 @@ def plot_full_comparison():
 ####################################################################################################################
 ######### DISJOINT OPT STUDY  ########################
 ###################################################################
-def plot_accuracy_vs_layers_disjoint(strategy_name="Linear"):
+def plot_accuracy_vs_layers_disjoint(strategy_name="PPFE"):
     """
     Genera il grafico Accuratezza vs Numero di Layer per l'architettura Disjoint.
-    Legge dal file: results_disjoint_layers_{strategy_name}.json
     """
-    # Nomenclatura aggiornata per includere la strategia
-    json_path = BASE_DIR / f"results_disjoint_layers_{strategy_name}.json"
+    # Nome file allineato con la funzione di salvataggio
+    json_path = BASE_DIR / f"results_layers_disjoint_{strategy_name}.json"
     
     if not json_path.exists():
         print(f"❓ File '{json_path.name}' non trovato. Salto questo grafico.")
@@ -380,7 +379,6 @@ def plot_accuracy_vs_layers_disjoint(strategy_name="Linear"):
         results = json.load(f)
 
     plt.figure(figsize=(10, 6))
-    # Colori distinti per l'architettura Disjoint
     configs = {"16x16": ('tab:purple', 'o'), "32x32": ('tab:red', 's'), "64x64": ('tab:brown', '^')}
 
     for label, (color, marker) in configs.items():
@@ -390,7 +388,6 @@ def plot_accuracy_vs_layers_disjoint(strategy_name="Linear"):
             accs = [data[str(l)] for l in layers]
             plt.plot(layers, accs, label=f'Disjoint {label}', color=color, marker=marker, linestyle='-', linewidth=2)
 
-    # Aggiunta linea Oracle fissa
     plt.axhline(y=95.58, color='black', linestyle=':', alpha=0.6, label='Oracle Baseline (95.58%)')
 
     plt.title(f'Disjoint Architecture: Accuracy vs SIM Layers ($L$) - {strategy_name}', pad=15, fontsize=14)
@@ -398,7 +395,6 @@ def plot_accuracy_vs_layers_disjoint(strategy_name="Linear"):
     plt.ylabel('Downstream Classification Accuracy (%)', fontsize=12)
     plt.ylim(0, 100)
     
-    # Mostra solo i tick dei layer effettivamente testati per pulizia
     if results and list(results.keys()):
         first_key = list(results.keys())[0]
         plt.xticks(sorted([int(l) for l in results[first_key].keys()]))
@@ -406,20 +402,17 @@ def plot_accuracy_vs_layers_disjoint(strategy_name="Linear"):
     plt.legend(loc='lower right', frameon=True, shadow=True)
     plt.grid(True, linestyle='--', alpha=0.7)
     
-    # Salvataggio dinamico
-    save_path = BASE_DIR / f"plot_disjoint_layers_{strategy_name}.png"
+    save_path = BASE_DIR / f"plot_layers_disjoint_{strategy_name}.png"
     plt.savefig(save_path, dpi=300, bbox_inches='tight')
     plt.close()
     print(f"✅ Grafico 'Disjoint: Accuracy vs Layers' salvato in: {save_path.name}")
 
 
-def plot_accuracy_vs_snr_disjoint(strategy_name="Linear"):
+def plot_accuracy_vs_snr_disjoint(strategy_name="PPFE"):
     """
     Genera il grafico Accuratezza vs SNR per l'architettura Disjoint.
-    Legge dal file: results_disjoint_snr_{strategy_name}.json
     """
-    # Nomenclatura aggiornata per includere la strategia
-    json_path = BASE_DIR / f"results_disjoint_snr_{strategy_name}.json"
+    json_path = BASE_DIR / f"results_snr_disjoint_{strategy_name}.json"
     
     if not json_path.exists():
         print(f"❓ File '{json_path.name}' non trovato. Salto questo grafico.")
@@ -434,13 +427,11 @@ def plot_accuracy_vs_snr_disjoint(strategy_name="Linear"):
     for label, (color, marker) in configs.items():
         if label in results:
             data = results[label]
-            # Filtra "Inf" se presente, altrimenti plotta i valori numerici
             snrs_numeric = sorted([int(s) for s in data.keys() if s != "Inf"])
             accs = [data[str(s)] for s in snrs_numeric]
             
-            plt.plot(snrs_numeric, accs, label=f'Disjoint {label} (L=5)', color=color, marker=marker, linewidth=2)
+            plt.plot(snrs_numeric, accs, label=f'Disjoint {label} (L=10)', color=color, marker=marker, linewidth=2)
             
-            # Linea tratteggiata per SNR Infinito (senza rumore) se il dato esiste
             if "Inf" in data:
                 plt.axhline(y=data["Inf"], color=color, linestyle='--', alpha=0.5, label=f'No Noise limit ({label})')
 
@@ -449,12 +440,10 @@ def plot_accuracy_vs_snr_disjoint(strategy_name="Linear"):
     plt.ylabel('Downstream Classification Accuracy (%)', fontsize=12)
     plt.ylim(0, 100)
     
-    # Legenda disposta su due colonne se ci sono troppe voci
     plt.legend(loc='lower right', frameon=True, shadow=True, ncol=1 if len(configs) < 3 else 2, fontsize='small')
     plt.grid(True, linestyle='--', alpha=0.7)
 
-    # Salvataggio dinamico
-    save_path = BASE_DIR / f"plot_disjoint_snr_{strategy_name}.png"
+    save_path = BASE_DIR / f"plot_snr_disjoint_{strategy_name}.png"
     plt.savefig(save_path, dpi=300, bbox_inches='tight')
     plt.close()
     print(f"✅ Grafico 'Disjoint: Accuracy vs SNR' salvato in: {save_path.name}")
