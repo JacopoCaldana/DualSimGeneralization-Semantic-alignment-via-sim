@@ -413,6 +413,42 @@ def mmse_svd_equalizer(
     return G, F
 
 
+
+def get_rx_equalizer(
+    channel_matrix: torch.Tensor,
+    snr_db: float = None,
+) -> torch.Tensor:
+    """
+    Stand-alone Linear MMSE/ZF equalizer for the RX-SIM.
+    Assumes the transmitter does NOT apply any channel precoding.
+    """
+    # SVD: H = U @ diag(s) @ Vh
+    U, s, Vh = torch.linalg.svd(channel_matrix, full_matrices=False)
+
+    # Get antennas
+    antennas_receiver, antennas_transmitter = channel_matrix.shape
+
+    # Form diagonal Sigma and cast to complex dtype
+    Sigma = torch.diag(s).to(channel_matrix.dtype)
+    V = Vh.H
+
+    if snr_db is not None:
+        snr_linear = 10 ** (snr_db / 10)
+        reg = (1.0 / snr_linear) * torch.eye(
+            Sigma.shape[1], dtype=channel_matrix.dtype, device=channel_matrix.device
+        )
+
+        # Full MMSE receiver: Q = V @ (Sigma^H @ Sigma + I/SNR)^-1 @ Sigma^H @ U^H
+        inv_term = torch.inverse(Sigma.H @ Sigma + reg)
+        Q = V @ inv_term @ (U @ Sigma).H
+    else:
+        # Zero-forcing: pseudoinverse of H -> Q = V @ Sigma^-1 @ U^H
+        inv_Sigma = torch.diag(1.0 / s).to(channel_matrix.dtype)
+        Q = V @ inv_Sigma @ U.H
+
+    return Q    
+
+
 # ================================================================
 #
 #                        Main Definition

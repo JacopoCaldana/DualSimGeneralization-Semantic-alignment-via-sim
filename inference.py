@@ -6,7 +6,8 @@ from utils import (
     a_inv_times_b, 
     sigma_given_snr, 
     awgn,
-    mmse_svd_equalizer 
+    mmse_svd_equalizer,
+    get_rx_equalizer 
 )
 
 def run_evaluation(model, dataloader, H_mimo, snr_db, beta_opt, L_in, mu_in, L_out, mu_out, clf, device):
@@ -128,68 +129,59 @@ def run_evaluation_mmse(dataloader, H_mimo, snr_db, A_target, L_in, mu_in, L_out
 
 
 
-def run_evaluation_disjoint(model, dataloader, H_mimo, snr_db, beta_product, L_in, mu_in, L_out, mu_out, clf, device):
-    """
-    Evaluates semantic accuracy for the Disjoint Optimization architecture.
-    Implements the exact formula: y_hat = beta_t * beta_r * G_R * (H * G_T * x + v)
     
-    Args:
-        model: The DualSIMoptimizerTorch model.
-        dataloader: Test set DataLoader.
-        H_mimo: The MIMO channel matrix [N_R, N_T].
-        snr_db: Signal-to-Noise Ratio in dB.
-        beta_product: The scalar value (beta_t * beta_r) returned by optimize_disjoint.
-        L_in, mu_in: TX whitening parameters.
-        L_out, mu_out: RX whitening parameters.
-        clf: The pre-trained downstream classifier.
-        device: Compute device.
+
+
+import torch
+import numpy as np
+
+def run_evaluation_disjoint_fixed(tx_model, rx_model, dataloader, H_mimo, snr_db, beta_global, L_in, mu_in, L_out, mu_out, clf, device):
     """
-    model.eval()
+    Evaluates semantic accuracy for the Disjoint strategy, 
+    matching the exact physical layer math of the joint optimization baseline.
+    """
+    tx_model.eval()
+    rx_model.eval()
     clf.eval()
     all_preds, all_labels = [], []
     
     with torch.no_grad():
-        # Estraiamo le matrici fisiche
-        G_T = model.get_TX_cascade()
-        G_R = model.get_RX_cascade()
-        
-        # Operatore End-to-End senza rumore (G_R * H * G_T)
+        G_T = tx_model.get_cascade()
+        G_R = rx_model.get_cascade()
+        # Formiamo la cascata effettiva
         Z_cascade = G_R @ H_mimo @ G_T
 
     for x_real_batch, labels_batch in dataloader:
         x_real_batch = x_real_batch.to(device)
         labels_batch = labels_batch.to(device)
         
-        # 1. TX Side: Compressione Complessa + Pre-whitening (vettore 'x')
+        # 1. TX Side: Compression + Pre-whitening
         x_complex = complex_compressed_tensor(x_real_batch.T, device=device)
         x_white = a_inv_times_b(L_in, x_complex - mu_in)
 
-        # 2. Over-The-Air Propagation: y_signal = G_R * H * G_T * x
-        y_signal = Z_cascade @ x_white
+        # 2. Over-The-Air (OTA) Propagation
+        # Nessun beta applicato qui! Rispettiamo la fisica originale
+        y_signal = Z_cascade @ x_white 
         
         if snr_db is not None:
-            # Calcolo della potenza del segnale alle antenne riceventi: H * G_T * x
+            # Calcolo rumore basato ESATTAMENTE sul segnale che colpisce la RX-SIM
             sig_at_rx = H_mimo @ G_T @ x_white
             sigma_v = sigma_given_snr(snr_db, sig_at_rx)
             
-            # Rumore AWGN 'v' filtrato fisicamente dalla SIM RX 'G_R'
             noise = awgn(sigma_v, y_signal.shape, device=device)
-            # Segnale fisico in uscita dall'hardware RX: G_R * (H * G_T * x + v)
+            # Il rumore viene filtrato fisicamente dalla RX-SIM
             y_received = y_signal + (G_R @ noise)
         else:
             y_received = y_signal
 
-        # ==========================================
-        # 3. RX Digital Baseband (La tua formula)
-        # ==========================================
-        # Compensazione energetica: y_hat = (beta_t * beta_r) * y_received
-        z_hat_complex = beta_product * y_received 
-
-        # 4. De-whitening e Decompressione
-        z_hat = (L_out @ z_hat_complex) + mu_out
+        # 3. RX Side: Digital Scaling + De-whitening
+        # Applichiamo il beta_global digitale in ricezione
+        z_hat = (L_out @ (beta_global * y_received)) + mu_out
+        
+        # Decompression
         y_hat_real = decompress_complex_tensor(z_hat, device=device).T
 
-        # 5. Classificazione
+        # 4. Downstream Task
         logits = clf(y_hat_real)
         preds = torch.argmax(logits, dim=1)
         
@@ -197,4 +189,6 @@ def run_evaluation_disjoint(model, dataloader, H_mimo, snr_db, beta_product, L_i
         all_labels.extend(labels_batch.cpu().numpy())
 
     accuracy = (np.array(all_preds) == np.array(all_labels)).mean()
-    return accuracy    
+    return accuracy
+
+

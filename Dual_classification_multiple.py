@@ -16,7 +16,7 @@ from oracle_test import run_oracle_test
 
 # --- Experiment Execution Functions ---
 from experiment_runner import run_experiment_layers, run_experiment_snr, run_experiment_1_mono_sim, run_sim_configuration_asymmetric,run_experiment_rx_depth,run_experiment_tx_depth, run_experiment_layers_disjoint
-from experiment_runner import run_experiment_layers_disjoint, run_experiment_snr_disjoint, evaluate_Z_accuracy
+from experiment_runner import run_experiment_layers_disjoint,run_experiment_snr_disjoint
 
 # ============================================================
 # 1. ENVIRONMENT SETUP AND PATHS
@@ -155,28 +155,34 @@ print(f"🎯 Baseline (Ideal A_target without channel): {oracle_acc * 100:.2f}%"
 #  DISJOINT OPTIMIZATION EXPERIMENTS 
 # ============================================================
 
-# --- DISJOINT EXP 1: Impact of Layers (L) ---
-print(f"\n 🧩 Starting Disjoint Experiment 1: Layers Variation ({ALIGNMENT_TYPE})...")
+# --- EXPERIMENT 1 (DISJOINT): Impact of Meta-surface Layers (L) ---
+print(f"🚀 Starting Disjoint Experiment 1: Layers Variation ({ALIGNMENT_TYPE})...")
 data_layers_disjoint = run_experiment_layers_disjoint(
     A_target=A_target, 
     H_mimo=H_mimo, 
     dm_task=dm_task, 
     clf=clf, 
-    L_in=L_in, mu_in=mu_in, L_out=L_out, mu_out=mu_out, 
+    L_in=L_in, 
+    mu_in=mu_in, 
+    L_out=L_out, 
+    mu_out=mu_out, 
     device=device,
     strategy_name=ALIGNMENT_TYPE
 )
 
-# --- DISJOINT EXP 2: Impact of SNR ---
-#print(f"\n 🧩 Starting Disjoint Experiment 2: SNR Sweep ({ALIGNMENT_TYPE})...")
+# --- EXPERIMENT 2 (DISJOINT): Impact of Signal-to-Noise Ratio (SNR) ---
+#print(f"\n🚀 Starting Disjoint Experiment 2: SNR Sweep ({ALIGNMENT_TYPE})...")
 #data_snr_disjoint = run_experiment_snr_disjoint(
- #    A_target=A_target, 
- #    H_mimo=H_mimo, 
- #    dm_task=dm_task, 
-  #   clf=clf, 
-   #  L_in=L_in, mu_in=mu_in, L_out=L_out, mu_out=mu_out, 
-    # device=device,
-     #strategy_name=ALIGNMENT_TYPE
+ #   A_target=A_target, 
+  #  H_mimo=H_mimo, 
+  #  dm_task=dm_task, 
+   # clf=clf, 
+    #L_in=L_in, 
+  #  mu_in=mu_in, 
+   # L_out=L_out, 
+   # mu_out=mu_out, 
+    #device=device,
+    #strategy_name=ALIGNMENT_TYPE
 #)
 
 

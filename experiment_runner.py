@@ -9,12 +9,12 @@ import torch.optim as optim
 
 # --- Local Modules Import ---
 from dualsim import DualSIMoptimizer, DualSIMoptimizerTorch
-from inference import run_evaluation, run_evaluation_disjoint
-from monosim import MonoSIMPhysical, MonoSIMTorch
+from inference import run_evaluation, run_evaluation_disjoint_fixed
+from monosim import MonoSIMoptimizer, MonoSIMoptimizerTorch
 import matplotlib.pyplot as plt
 from pathlib import Path
 
-from utils import complex_compressed_tensor, decompress_complex_tensor
+from utils import complex_compressed_tensor, decompress_complex_tensor,get_rx_equalizer
 
 # Set base directory for results
 #BASE_DIR = Path('/Users/jacopocaldana/Desktop/Università/Tesi')
@@ -474,280 +474,170 @@ import torch.optim as optim
 import torch
 import torch.optim as optim
 
-from utils import mmse_svd_equalizer  
 
-import torch
-import torch.optim as optim
-from utils import mmse_svd_equalizer
-import math
-
-def run_disjoint_optimization(
-    sim_tx_cpu, sim_rx_cpu, A_target, H_mimo, device, 
-    lr_tx=0.01, lr_rx=0.01, iters=2500, snr_db_mmse=None
+def run_sim_configuration_disjoint(
+    L, M_int, A_target, H_mimo, snr_list, 
+    dm_task, clf, L_in, mu_in, L_out, mu_out, device, 
+    max_iters=5000, lr=0.1
 ):
-    print("\n" + "="*50)
-    print("🔄 AVVIO OTTIMIZZAZIONE DISJOINT (Fix Adam & Sigmoide)")
-    print("="*50)
-
-    tx_sim = MonoSIMTorch(sim_tx_cpu).to(device)
-    rx_sim = MonoSIMTorch(sim_rx_cpu).to(device)
-    
-    A_torch = torch.as_tensor(A_target, dtype=torch.complex64, device=device)
-    H_torch = torch.as_tensor(H_mimo, dtype=torch.complex64, device=device)
-
-    # 1. Target RX: Equalizzatore puro
-    Q_target, F_target = mmse_svd_equalizer(H_torch, snr_db=snr_db_mmse)
-    N_t = H_torch.shape[1]
-    Q_target = Q_target / math.sqrt(N_t) 
-    Q_target = Q_target.to(device)
-
-    # 2. Target TX: Pre-rotazione
-    U, s, Vh = torch.linalg.svd(H_torch)
-    V = Vh.mH
-    A_pre_rotated = V @ A_torch
-
-    opt_T = optim.Adam(tx_sim.parameters(), lr=lr_tx)
-    opt_R = optim.Adam(rx_sim.parameters(), lr=lr_rx)
-
-    # ==========================================
-    # FASE 1: Semantic Alignment (TX)
-    # ==========================================
-    print("\n📡 FASE 1: Semantic Alignment (TX)...")
-    rows_T, cols_T = A_pre_rotated.shape
-    
-    for i in range(iters):
-        opt_T.zero_grad()
-        G_1 = tx_sim.get_cascade()
-        
-        # Stacchiamo G_1 per il calcolo del Beta, per non sporcare il gradiente 
-        G_1_detached = G_1.detach()
-        b_1 = torch.sum(torch.conj(G_1_detached) * A_pre_rotated) / (torch.sum(torch.abs(G_1_detached)**2) + 1e-12)
-        
-        #
-        loss_T = torch.norm(A_pre_rotated - b_1 * G_1, p='fro')**2 / (rows_T * cols_T)
-        
-        loss_T.backward()
-        opt_T.step()
-        
-        if i % 500 == 0:
-            print(f"   [TX Iter {i:4d}] Loss (Norm): {loss_T.item():.6f} | Beta_1: {torch.abs(b_1).item():.2e}")
-
-    with torch.no_grad():
-        G_1_final = tx_sim.get_cascade()
-        b_1_final = torch.sum(torch.conj(G_1_final) * A_pre_rotated) / (torch.sum(torch.abs(G_1_final)**2) + 1e-12)
-
-    # ==========================================
-    # FASE 2: Channel Equalization (RX)
-    # ==========================================
-    print("\n🎯 FASE 2: MMSE Channel Equalization (RX)...")
-    rows_R, cols_R = Q_target.shape
-    
-    for i in range(iters):
-        opt_R.zero_grad()
-        G_2 = rx_sim.get_cascade()
-        
-        G_2_detached = G_2.detach()
-        b_2 = torch.sum(torch.conj(G_2_detached) * Q_target) / (torch.sum(torch.abs(G_2_detached)**2) + 1e-12)
-        
-    
-        loss_R = torch.norm(Q_target - b_2 * G_2, p='fro')**2 / (rows_R * cols_R)
-        
-        loss_R.backward()
-        opt_R.step()
-        
-        if i % 500 == 0:
-            print(f"   [RX Iter {i:4d}] Loss (Norm): {loss_R.item():.6f} | Beta_2: {torch.abs(b_2).item():.2e}")
-
-    with torch.no_grad():
-        G_2_final = rx_sim.get_cascade()
-        b_2_final = torch.sum(torch.conj(G_2_final) * Q_target) / (torch.sum(torch.abs(G_2_final)**2) + 1e-12)
-
-    # ==========================================
-    # FASE 3: Ricomposizione e Output
-    # ==========================================
-    with torch.no_grad():
-        Z_f = G_2_final @ H_torch @ G_1_final
-        beta_totale = b_1_final * b_2_final
-        
-        print(f"\n🔍 CHECK MATEMATICO (Disjoint Puro):")
-        print(f"   Beta 1 (TX) : {torch.abs(b_1_final).item():.2e}")
-        print(f"   Beta 2 (RX) : {torch.abs(b_2_final).item():.2e}")
-        print(f"   Beta Totale : {torch.abs(beta_totale).item():.2e}")
-        print(f"   ||A_target||: {torch.norm(A_torch).item():.2f}")
-        print(f"   ||Beta * Z||: {torch.norm(beta_totale * Z_f).item():.2f}")
-
-    return Z_f, tx_sim, rx_sim, [], [], beta_totale
-        
-
-
-def evaluate_Z_accuracy(Z_effettiva, beta_totale, dm_task, clf, L_in, mu_in, L_out, mu_out, snr_list, device):
-    from utils import complex_compressed_tensor, decompress_complex_tensor
-    clf.eval()
-    all_acc = {}
-    
-    # Z_effettiva = G_R @ H @ G_T
-    Z_eval = Z_effettiva.to(device)
-    beta_eval = beta_totale.to(device)
-
-    with torch.no_grad():
-        for snr in snr_list:
-            correct, total = 0, 0
-            for batch in dm_task.test_dataloader():
-                x_real, y_label = batch[0].to(device), batch[1].to(device)
-                
-                # 1. TX: Compressione + Whitening 
-                x_complex = complex_compressed_tensor(x_real.T, device=device)
-                # x_white = L_in^-1 @ (x - mu) -> Usiamo solve per simulare a_inv_times_b
-                x_white = torch.linalg.solve(L_in, x_complex - mu_in)
-
-                # 2. Canale + Dual SIM
-                y_received = Z_eval @ x_white
-                
-                # 3. RX: Scaling + De-whitening
-                # (L_out @ (beta * y)) + mu_out
-                z_hat = (L_out @ (beta_eval * y_received)) + mu_out
-                
-                # 4. Classificazione
-                y_hat_real = decompress_complex_tensor(z_hat, device=device).T
-                logits = clf(y_hat_real)
-                preds = torch.argmax(logits, dim=1)
-                
-                correct += (preds == y_label).sum().item()
-                total += y_label.size(0)
-            
-            acc = (correct/total)*100
-            all_acc[str(snr) if snr else "Inf"] = acc
-    return all_acc
-            
-def run_experiment_snr_disjoint(A_target, H_mimo, dm_task, clf, L_in, mu_in, L_out, mu_out, device, strategy_name="Linear"):
     """
-    DISJOINT EXP 2: Valuta la robustezza al rumore (SNR) 
-    fissando i Layer a L=10.
+    Trains and evaluates a Disjoint Dual-SIM setup.
+    TX performs Semantic Alignment, RX performs Channel Equalization.
+    Includes Global Beta Recalibration to fix scale drift and ensure fair comparison.
     """
-    print("\n" + "="*50)
-    print(f"🧩 STARTING DISJOINT EXP 2: ACCURACY vs SNR | Strategy: {strategy_name}")
-    print("="*50)
-    
-    L_fixed = 10
-    M_int_list = [16, 32]
-    snr_list = [-30, -20, -10, 0, 10, 20, 30]
-    
-    results_snr_disjoint = {}
+    wavelength = 0.005  # 5mm (60 GHz)
+    slayer = 5 * wavelength 
+    dx = wavelength / 2 
 
-    for M_int in M_int_list:
-        print(f"\n🔄 Disjoint Config: {M_int}x{M_int} Meta-atoms | L = {L_fixed} (Fixed)")
-        
-        # 1. Setup Fisico Modulare
-        sim_tx_cpu = MonoSIMPhysical(
-                num_layers=L, # Usa L_fixed per la funzione SNR
-                num_atoms_in_x=16, num_atoms_in_y=12,   # 16 x 12 = 192 (Input Semantico)
-                num_atoms_out_x=24, num_atoms_out_y=16, # 24 x 16 = 384 (Antenne TX verso il canale)
-                num_atoms_int_x=M_int, num_atoms_int_y=M_int, 
-                thickness=0.05, wavelength=0.01
-            )
-            
-            # RX SIM deve invertire il canale H [384 x 384]
-        sim_rx_cpu = MonoSIMPhysical(
-                num_layers=L, # Usa L_fixed per la funzione SNR
-                num_atoms_in_x=24, num_atoms_in_y=16,   # 24 x 16 = 384 (Antenne RX dal canale)
-                num_atoms_out_x=24, num_atoms_out_y=16, # 24 x 16 = 384 (Output Semantico)
-                num_atoms_int_x=M_int, num_atoms_int_y=M_int, 
-                thickness=0.05, wavelength=0.01
-            )
+    # --- 1. Inizializzazione Fisica INDIPENDENTE ---
+    # TX-SIM: Input semantico -> Antenne TX
+    tx_sim_cpu = MonoSIMoptimizer(
+        num_layers=L, 
+        num_meta_atoms_in_x=16, num_meta_atoms_in_y=12,
+        num_meta_atoms_out_x=24, num_meta_atoms_out_y=16, # N_T = 384
+        num_meta_atoms_int_x=M_int, num_meta_atoms_int_y=M_int,  
+        thickness=slayer * L,
+        wavelength=wavelength, spacings={'in': dx, 'out': dx, 'int': dx}, verbose=False 
+    )
 
-        # 2. Ottimizzazione Disjoint (TX poi RX)
-        # Recupera 6 variabili dall'ottimizzatore (incluso beta_totale)
-        Z_effettiva, _, _, loss_tx, loss_rx, beta_totale = run_disjoint_optimization(
-                sim_tx_cpu, sim_rx_cpu, A_target, H_mimo, device, 
-                lr_tx=0.1, lr_rx=0.1, iters=2500 
+    # RX-SIM: Antenne RX -> Output semantico
+    rx_sim_cpu = MonoSIMoptimizer(
+        num_layers=L,
+        num_meta_atoms_in_x=24, num_meta_atoms_in_y=16,   # N_R = 384
+        num_meta_atoms_out_x=24, num_meta_atoms_out_y=16, 
+        num_meta_atoms_int_x=M_int, num_meta_atoms_int_y=M_int,
+        thickness=slayer * L,
+        wavelength=wavelength, spacings={'in': dx, 'out': dx, 'int': dx}, verbose=False 
+    )
+
+    # Convert to PyTorch Models
+    tx_model = MonoSIMoptimizerTorch(tx_sim_cpu).to(device)
+    rx_model = MonoSIMoptimizerTorch(rx_sim_cpu).to(device)
+
+    # --- 2. Ottimizzazione TX (Semantic Alignment) ---
+    print("   -> Optimizing TX-SIM (Semantic Target)...")
+    loss_history_tx, _ = tx_model.optimize_sim(
+        target_matrix=A_target, max_iters=max_iters, lr=lr
+    )
+
+    # --- 3. Ottimizzazione RX (Channel Equalization) ---
+    print("   -> Optimizing RX-SIM (Zero-Forcing Target)...")
+    # Generiamo il target ZF (snr_db=None) usando la funzione basata su SVD
+    Q_target = get_rx_equalizer(H_mimo, snr_db=None).to(device)
+    
+    loss_history_rx, _ = rx_model.optimize_sim(
+        target_matrix=Q_target, max_iters=max_iters, lr=lr, lambda_reg=1e-4
+    )
+
+    # --- CHECK CONVERGENCE (Plottiamo entrambe le loss) ---
+    plot_filename_tx = BASE_DIR / f"loss_plot_TX_L{L}_M{M_int}.png"
+    plot_filename_rx = BASE_DIR / f"loss_plot_RX_L{L}_M{M_int}.png"
+    
+    plot_and_save_loss(loss_history_tx, filename=plot_filename_tx, title=f"TX Convergence (L={L}, M={M_int})")
+    plot_and_save_loss(loss_history_rx, filename=plot_filename_rx, title=f"RX Convergence (L={L}, M={M_int})")
+
+    # --- 3.5 RICALIBRAZIONE DEL BETA GLOBALE (La vera fix) ---
+    # Calcoliamo il beta ottimale sull'intera cascata esatta, 
+    # garantendo che la scala sia perfetta per il de-whitening.
+    with torch.no_grad():
+        G_T_opt = tx_model.get_cascade()
+        G_R_opt = rx_model.get_cascade()
+        Z_final = G_R_opt @ H_mimo @ G_T_opt
+        
+        beta_global = torch.sum(torch.conj(Z_final) * A_target) / (torch.sum(torch.conj(Z_final) * Z_final) + 1e-12)
+
+    # --- 4. Evaluation across all SNR levels ---
+    results = {}
+    for snr in snr_list:
+        acc = run_evaluation_disjoint_fixed(
+            tx_model=tx_model, rx_model=rx_model, dataloader=dm_task.test_dataloader(), 
+            H_mimo=H_mimo, snr_db=snr, beta_global=beta_global, 
+            L_in=L_in, mu_in=mu_in, L_out=L_out, mu_out=mu_out, 
+            clf=clf, device=device
         )
-            
-        # Se vuoi plottare la loss (opzionale)
-        plot_disjoint_convergence(loss_tx, loss_rx, L, M_int, strategy_name)
-            
-        # 3. Valutazione su tutto il range di SNR
-        print("\n📊 Calcolo Accuracy sul Test Set (Sweep SNR)...")
-        acc_dict = evaluate_Z_accuracy(
-                Z_effettiva, beta_totale, dm_task, clf, L_in, mu_in, L_out, mu_out, snr_list, device
-        )
-        
-        
-        results_snr_disjoint[f"{M_int}x{M_int}"] = acc_dict
-        
-        for snr_val, acc_val in acc_dict.items():
-            print(f"  - SNR {snr_val:>4} dB : {acc_val:.2f}%")
-            
-        # Salvataggio incrementale
-        filename = BASE_DIR / f"results_disjoint_snr_{strategy_name}.json"
-        with open(filename, "w") as f:
-            json.dump(results_snr_disjoint, f, indent=4)
-            
-    print(f"\n🎯 DISJOINT EXP 2 COMPLETED! Data saved to {filename.name}")
-    return results_snr_disjoint
+        snr_key = "Inf" if snr is None else str(snr)
+        results[snr_key] = acc * 100
+
+    # Ritorniamo i risultati e le loss per debug
+    return results, loss_history_tx, loss_history_rx
 
 
 def run_experiment_layers_disjoint(A_target, H_mimo, dm_task, clf, L_in, mu_in, L_out, mu_out, device, strategy_name="Linear"):
     """
-    DISJOINT EXP 1: Valuta l'impatto della profondità L (numero di layer)
-    mantenendo l'SNR infinito (no rumore).
+    EXPERIMENT 1 (DISJOINT): Accuracy vs Number of SIM Layers (L).
+    Salvataggio differenziato per strategia (Linear/PPFE) e approccio (Disjoint).
     """
     print("\n" + "="*50)
-    print(f"🧩 STARTING DISJOINT EXP 1: ACCURACY vs LAYERS | Strategy: {strategy_name}")
+    print(f"🚀 STARTING DISJOINT EXP 1: ACCURACY vs LAYERS (L) | Strategy: {strategy_name}")
     print("="*50)
     
     layer_list = [2, 5, 10, 15, 20, 25]
-    M_int_list = [16, 32] 
-    snr_list = [None]
-    results_layers_disjoint = {}
+    atoms_list = [16, 32] 
+    snr_eval = [None]  # Testiamo senza rumore per valutare la pura capacità di emulazione
+    
+    results_layers = {}
 
-    for M_int in M_int_list:
-
-        results_layers_disjoint[f"{M_int}x{M_int}"] = {}
-        
+    for M_int in atoms_list:
+        results_layers[f"{M_int}x{M_int}"] = {}
         for L in layer_list:
-            print(f"\n🔄 Disjoint Config: {M_int}x{M_int} Meta-atoms | L = {L} Layers")
+            print(f"\n🔄 Testing Config: {M_int}x{M_int} Meta-atoms | L = {L} Layers")
             
-            # 1. Setup Fisico Modulare
-            sim_tx_cpu = MonoSIMPhysical(
-                num_layers=L, # Usa L_fixed per la funzione SNR
-                num_atoms_in_x=16, num_atoms_in_y=12,   # 16 x 12 = 192 (Input Semantico)
-                num_atoms_out_x=24, num_atoms_out_y=16, # 24 x 16 = 384 (Antenne TX verso il canale)
-                num_atoms_int_x=M_int, num_atoms_int_y=M_int, 
-                thickness=0.05, wavelength=0.01
+            # Nota i due '_' per raccogliere entrambe le loss history (TX e RX)
+            acc_dict, _, _ = run_sim_configuration_disjoint(
+                L=L, M_int=M_int, A_target=A_target, H_mimo=H_mimo, 
+                snr_list=snr_eval, dm_task=dm_task, clf=clf, 
+                L_in=L_in, mu_in=mu_in, L_out=L_out, mu_out=mu_out, 
+                device=device, max_iters=5000, lr=0.1
             )
-            
-            # RX SIM deve invertire il canale H [384 x 384]
-            sim_rx_cpu = MonoSIMPhysical(
-                num_layers=L, # Usa L_fixed per la funzione SNR
-                num_atoms_in_x=24, num_atoms_in_y=16,   # 24 x 16 = 384 (Antenne RX dal canale)
-                num_atoms_out_x=24, num_atoms_out_y=16, # 24 x 16 = 384 (Output Semantico)
-                num_atoms_int_x=M_int, num_atoms_int_y=M_int, 
-                thickness=0.05, wavelength=0.01
-            )
-
-            # 2. Ottimizzazione Disjoint (TX poi RX)
-            Z_effettiva, _, _, loss_tx, loss_rx, beta_totale = run_disjoint_optimization(
-                sim_tx_cpu, sim_rx_cpu, A_target, H_mimo, device, 
-                lr_tx=0.1, lr_rx=0.1, iters=2500 
-            )
-            
-            # Se vuoi plottare la loss (opzionale)
-            plot_disjoint_convergence(loss_tx, loss_rx, L, M_int, strategy_name)
-            
-            # 3. Valutazione (Solo SNR Infinito)
-            acc_dict = evaluate_Z_accuracy(
-                Z_effettiva, beta_totale, dm_task, clf, L_in, mu_in, L_out, mu_out, snr_list, device
-            )
-            
             
             acc_val = acc_dict["Inf"]
-            results_layers_disjoint[f"{M_int}x{M_int}"][str(L)] = acc_val
-            print(f"✅ Disjoint Result (L={L}): Accuracy = {acc_val:.2f}%")
+            results_layers[f"{M_int}x{M_int}"][str(L)] = acc_val
+            print(f"✅ Result: Accuracy = {acc_val:.2f}%")
             
-            # Salvataggio incrementale
-            filename = BASE_DIR / f"results_disjoint_layers_{strategy_name}.json"
+            # --- SALVATAGGIO DINAMICO ---
+            filename = BASE_DIR / f"results_layers_disjoint_{strategy_name}.json"
             with open(filename, "w") as f:
-                json.dump(results_layers_disjoint, f, indent=4)
+                json.dump(results_layers, f, indent=4)
                 
-    print(f"\n🎯 DISJOINT EXP 1 COMPLETED! Data saved to {filename.name}")
-    return results_layers_disjoint
+    print(f"\n🎯 EXPERIMENT 1 COMPLETED! Data saved to {filename.name}")
+    return results_layers
+
+
+def run_experiment_snr_disjoint(A_target, H_mimo, dm_task, clf, L_in, mu_in, L_out, mu_out, device, strategy_name="Linear"):
+    """
+    EXPERIMENT 2 (DISJOINT): Accuracy vs Signal-to-Noise Ratio (SNR).
+    Salvataggio differenziato per strategia (Linear/PPFE) e approccio (Disjoint).
+    """
+    print("\n" + "="*50)
+    print(f"🚀 STARTING DISJOINT EXP 2: ACCURACY vs SNR | Strategy: {strategy_name}")
+    print("="*50)
+    
+    L_fixed = 10
+    atoms_list = [16, 32]
+    snr_list = [-30, -20, -10, 0, 10, 20, 30]
+    
+    results_snr = {}
+
+    for M_int in atoms_list:
+        print(f"\n🔄 Testing Config: {M_int}x{M_int} Meta-atoms | L = {L_fixed} (Fixed)")
+        
+        # Testiamo la configurazione fissa su tutto il range di SNR
+        acc_dict, _, _ = run_sim_configuration_disjoint(
+            L=L_fixed, M_int=M_int, A_target=A_target, H_mimo=H_mimo, 
+            snr_list=snr_list, dm_task=dm_task, clf=clf, 
+            L_in=L_in, mu_in=mu_in, L_out=L_out, mu_out=mu_out, 
+            device=device, max_iters=5000, lr=0.1
+        )
+        
+        results_snr[f"{M_int}x{M_int}"] = acc_dict
+        
+        for snr_val, acc_val in acc_dict.items():
+            print(f"  - SNR {snr_val:>3} dB : {acc_val:.2f}%")
+            
+        # --- SALVATAGGIO DINAMICO ---
+        filename = BASE_DIR / f"results_snr_disjoint_{strategy_name}.json"
+        with open(filename, "w") as f:
+            json.dump(results_snr, f, indent=4)
+            
+    print(f"\n🎯 EXPERIMENT 2 COMPLETED! Data saved to {filename.name}")
+    return results_snr
