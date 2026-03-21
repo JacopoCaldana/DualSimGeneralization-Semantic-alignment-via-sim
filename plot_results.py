@@ -1,6 +1,8 @@
 import json
 import matplotlib.pyplot as plt
 from pathlib import Path
+from matplotlib.lines import Line2D
+
 
 # Configurazione per rendere i grafici professionali
 plt.style.use('seaborn-v0_8-whitegrid') # Stile pulito
@@ -478,6 +480,240 @@ def plot_depth_lr_comparison(strategy_name="PPFE"):
     plt.savefig(BASE_DIR / f"plot_grid_search_L_vs_LR_{strategy_name}.png", dpi=300)
     print(f"✅ Grafico Cross-Grid salvato.")
 
+
+##############################################################################################
+
+
+def plot_ultimate_layers_comparison():
+    """
+    Genera il grafico finale Accuracy vs SIM Layers (L).
+    Mappatura aggiornata:
+    - Colore -> Architettura (Joint, Disjoint, MonoSIM)
+    - Marker -> Meta-Atomi (16x16, 32x32)
+    - Stile Linea -> Strategia (Linear, PPFE)
+    """
+    # 1. Definizione della mappa dei file
+    files_map = {
+        "Joint": {
+            "Linear": BASE_DIR / "results_layers_Linear.json",
+            "PPFE": BASE_DIR / "results_layers_PPFE.json"
+        },
+        "Disjoint": {
+            "Linear": BASE_DIR / "results_layers_disjoint_Linear.json",
+            "PPFE": BASE_DIR / "results_layers_disjoint_PPFE.json"
+        },
+        "MonoSIM": {
+            "Linear": BASE_DIR / "results_layers_monosim_Linear.json",
+            "PPFE": BASE_DIR / "results_layers_monosim_PPFE.json"
+        }
+    }
+
+    # 2. Nuova Definizione dello Stile Visivo
+    # Colori per evidenziare le Architetture
+    colors = {"Joint": "tab:blue", "Disjoint": "tab:orange", "MonoSIM": "tab:green"}
+    # Marker (Ingranditi) per distinguere la grandezza della metasuperficie
+    markers = {"16x16": "o", "32x32": "^"} 
+    # Stile linea per le Strategie
+    linestyles = {"Linear": "-", "PPFE": "--"}
+
+    plt.figure(figsize=(12, 8))
+    
+    # 3. Iterazione e Plotting dei Dati
+    for arch_name, arch_dict in files_map.items():
+        color = colors[arch_name]  # Il colore è ora dettato dall'architettura
+        
+        for strat_name, file_path in arch_dict.items():
+            if not file_path.exists():
+                print(f"⚠️ File mancante, verrà ignorato: {file_path.name}")
+                continue
+                
+            with open(file_path, "r") as f:
+                data = json.load(f)
+                
+            for atoms, marker in markers.items():
+                if atoms in data:
+                    layers_str = sorted([int(l) for l in data[atoms].keys()])
+                    accs = [data[atoms][str(l)] for l in layers_str]
+                    
+                    plt.plot(
+                        layers_str, accs, 
+                        color=color, 
+                        linestyle=linestyles[strat_name], 
+                        marker=marker, 
+                        markersize=10,  # <-- MARKER PIÙ GRANDI
+                        linewidth=2.5,  # <-- LINEA PIÙ SPESSA
+                        alpha=0.85
+                    )
+
+    # 4. Aggiunta Baseline 
+    plt.axhline(y=95.58, color='black', linestyle=':', alpha=0.8, linewidth=2.5, label='No Missmatch(95.58%)')
+
+    # 5. COSTRUZIONE LEGENDA CUSTOM 
+    legend_elements = [
+        # Sezione Architetture (Ora sono i COLORI)
+        Line2D([0], [0], color="w", label=r"$\bf{Architecture:}$"),
+        Line2D([0], [0], color=colors["Joint"], lw=3, label='Dual-SIM (Joint)'),
+        Line2D([0], [0], color=colors["Disjoint"], lw=3, label='Dual-SIM (Disjoint)'),
+        Line2D([0], [0], color=colors["MonoSIM"], lw=3, label='Mono-SIM (TX)'),
+        
+        Line2D([0], [0], color="w", label=""), # Spaziatore
+        
+        # Sezione Meta-Atomi (Ora sono i MARKER)
+        Line2D([0], [0], color="w", label=r"$\bf{Meta-Atoms:}$"),
+        Line2D([0], [0], color='gray', marker=markers["16x16"], linestyle='none', markersize=10, label='16x16'),
+        Line2D([0], [0], color='gray', marker=markers["32x32"], linestyle='none', markersize=10, label='32x32'),
+        
+        Line2D([0], [0], color="w", label=""), # Spaziatore
+        
+        # Sezione Strategie (Linestyles)
+        Line2D([0], [0], color="w", label=r"$\bf{Strategy:}$"),
+        Line2D([0], [0], color='gray', linestyle=linestyles["Linear"], lw=2.5, label='Linear (Supervised)'),
+        Line2D([0], [0], color='gray', linestyle=linestyles["PPFE"], lw=2.5, label='PPFE (Zero-Shot)'),
+        
+        Line2D([0], [0], color="w", label=""), # Spaziatore
+        
+        # Oracle
+        Line2D([0], [0], color='black', linestyle=':', lw=2.5, label='No missmatch')
+    ]
+
+    plt.legend(handles=legend_elements, loc='center left', bbox_to_anchor=(1.02, 0.5), frameon=True, shadow=True, fontsize=11)
+
+    # 6. Formattazione Finale
+    plt.title('Architecture Comparison: Downstream Accuracy vs SIM Layers', pad=15, fontsize=16, fontweight='bold')
+    plt.xlabel('Number of SIM Layers ($L$)', fontsize=14)
+    plt.ylabel('Downstream Classification Accuracy (%)', fontsize=14)
+    plt.ylim(0, 100)
+    plt.xticks([2, 5, 10, 15, 20, 25], fontsize=12)
+    plt.yticks(fontsize=12)
+    plt.grid(True, linestyle='--', alpha=0.6)
+
+    # 7. Salvataggio
+    save_path = BASE_DIR / "plot_ultimate_comparison_layers.png"
+    plt.savefig(save_path, dpi=300, bbox_inches='tight')
+    plt.close()
+    print(f"✅ Grafico finale definitivo salvato in: {save_path.name}")
+
+
+
+
+
+import json
+import matplotlib.pyplot as plt
+from matplotlib.lines import Line2D
+from pathlib import Path
+
+BASE_DIR = Path(__file__).resolve().parent
+
+def plot_ultimate_snr_comparison():
+    """
+    Genera il grafico finale Accuracy vs SNR.
+    Mappatura coerente con il plot Layers:
+    - Colore -> Architettura (Joint, Disjoint, MonoSIM)
+    - Marker -> Meta-Atomi (16x16, 32x32)
+    - Stile Linea -> Strategia (Linear, PPFE)
+    """
+    # 1. Definizione della mappa dei file (Aggiornata per SNR)
+    files_map = {
+        "Joint": {
+            "Linear": BASE_DIR / "results_snr_Linear.json",
+            "PPFE": BASE_DIR / "results_snr_PPFE.json"
+        },
+        "Disjoint": {
+            "Linear": BASE_DIR / "results_snr_disjoint_Linear.json",
+            "PPFE": BASE_DIR / "results_snr_disjoint_PPFE.json"
+        },
+        "MonoSIM": {
+            "Linear": BASE_DIR / "results_snr_monosim_Linear.json",
+            "PPFE": BASE_DIR / "results_snr_monosim_PPFE.json"
+        }
+    }
+
+    # 2. Stile Visivo Identico
+    colors = {"Joint": "tab:blue", "Disjoint": "tab:orange", "MonoSIM": "tab:green"}
+    markers = {"16x16": "o", "32x32": "^"} 
+    linestyles = {"Linear": "-", "PPFE": "--"}
+
+    plt.figure(figsize=(12, 8))
+    
+    # 3. Iterazione e Plotting dei Dati
+    for arch_name, arch_dict in files_map.items():
+        color = colors[arch_name]
+        
+        for strat_name, file_path in arch_dict.items():
+            if not file_path.exists():
+                print(f"⚠️ File mancante, verrà ignorato: {file_path.name}")
+                continue
+                
+            with open(file_path, "r") as f:
+                data = json.load(f)
+                
+            for atoms, marker in markers.items():
+                if atoms in data:
+                    # Estraiamo l'SNR numerico (escludendo l'eventuale caso senza rumore "Inf")
+                    snrs_str = sorted([int(s) for s in data[atoms].keys() if s != "Inf"])
+                    accs = [data[atoms][str(s)] for s in snrs_str]
+                    
+                    if len(snrs_str) > 0:
+                        plt.plot(
+                            snrs_str, accs, 
+                            color=color, 
+                            linestyle=linestyles[strat_name], 
+                            marker=marker, 
+                            markersize=10, 
+                            linewidth=2.5, 
+                            alpha=0.85
+                        )
+
+    # 4. Aggiunta Baseline 
+    plt.axhline(y=95.58, color='black', linestyle=':', alpha=0.8, linewidth=2.5, label='No Missmatch (95.58%)')
+
+    # 5. COSTRUZIONE LEGENDA CUSTOM
+    legend_elements = [
+        # Sezione Architetture
+        Line2D([0], [0], color="w", label=r"$\bf{Architecture:}$"),
+        Line2D([0], [0], color=colors["Joint"], lw=3, label='Dual-SIM (Joint)'),
+        Line2D([0], [0], color=colors["Disjoint"], lw=3, label='Dual-SIM (Disjoint)'),
+        Line2D([0], [0], color=colors["MonoSIM"], lw=3, label='Mono-SIM (TX)'),
+        
+        Line2D([0], [0], color="w", label=""), # Spaziatore
+        
+        # Sezione Meta-Atomi
+        Line2D([0], [0], color="w", label=r"$\bf{Meta-Atoms:}$"),
+        Line2D([0], [0], color='gray', marker=markers["16x16"], linestyle='none', markersize=10, label='16x16'),
+        Line2D([0], [0], color='gray', marker=markers["32x32"], linestyle='none', markersize=10, label='32x32'),
+        
+        Line2D([0], [0], color="w", label=""), # Spaziatore
+        
+        # Sezione Strategie
+        Line2D([0], [0], color="w", label=r"$\bf{Strategy:}$"),
+        Line2D([0], [0], color='gray', linestyle=linestyles["Linear"], lw=2.5, label='Linear (Supervised)'),
+        Line2D([0], [0], color='gray', linestyle=linestyles["PPFE"], lw=2.5, label='PPFE (Zero-Shot)'),
+        
+        Line2D([0], [0], color="w", label=""), # Spaziatore
+        
+        # Oracle
+        Line2D([0], [0], color='black', linestyle=':', lw=2.5, label='No Mismatch')
+    ]
+
+    plt.legend(handles=legend_elements, loc='center left', bbox_to_anchor=(1.02, 0.5), frameon=True, shadow=True, fontsize=11)
+
+    # 6. Formattazione Finale
+    plt.title('Architecture Comparison: Downstream Accuracy vs SNR (L=10)', pad=15, fontsize=16, fontweight='bold')
+    plt.xlabel('Signal-to-Noise Ratio (dB)', fontsize=14)
+    plt.ylabel('Downstream Classification Accuracy (%)', fontsize=14)
+    plt.ylim(0, 100)
+    
+    # Adattamento dei Ticks specifici per l'SNR
+    plt.xticks([-30, -20, -10, 0, 10, 20, 30], fontsize=12)
+    plt.yticks(fontsize=12)
+    plt.grid(True, linestyle='--', alpha=0.6)
+
+    # 7. Salvataggio
+    save_path = BASE_DIR / "plot_ultimate_comparison_snr.png"
+    plt.savefig(save_path, dpi=300, bbox_inches='tight')
+    plt.close()
+    print(f"✅ Grafico finale definitivo SNR salvato in: {save_path.name}")
+
 #####################################################################
 #####################################################################    
 
@@ -496,6 +732,8 @@ if __name__ == "__main__":
     plot_accuracy_vs_layers_disjoint(strategy_name="PPFE")
     plot_accuracy_vs_snr_disjoint(strategy_name="PPFE")
     plot_depth_lr_comparison()
+    plot_ultimate_layers_comparison()
+    plot_ultimate_snr_comparison()
 
 
 

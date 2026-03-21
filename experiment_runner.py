@@ -566,7 +566,7 @@ def run_experiment_layers_disjoint(A_target, H_mimo, dm_task, clf, L_in, mu_in, 
                 L=L, M_int=M_int, A_target=A_target, H_mimo=H_mimo, 
                 snr_list=snr_eval, dm_task=dm_task, clf=clf, 
                 L_in=L_in, mu_in=mu_in, L_out=L_out, mu_out=mu_out, 
-                device=device, max_iters=5000, lr=0.1
+                device=device, max_iters=5000, lr=0.01
             )
             
             acc_val = acc_dict["Inf"]

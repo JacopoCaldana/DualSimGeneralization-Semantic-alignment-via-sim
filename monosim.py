@@ -123,7 +123,7 @@ class MonoSIMoptimizerTorch(nn.Module):
             G = Y_l @ W_l @ G
         return G
 
-    def optimize_sim(self, target_matrix, max_iters=5000, lr=0.05, lambda_reg=0.0):
+    def optimize_sim(self, target_matrix, max_iters=5000, lr=0.01, lambda_reg=0.0):
         """
         Ottimizzazione TX usando Adam per gestire la profondità dei layer.
         """
@@ -172,9 +172,9 @@ class MonoSIMoptimizerTorch(nn.Module):
         return loss_history, beta_f.item()
 
 
-    def optimize_rx_sequential(self, H_eff, A_target, max_iters=5000, lr=0.05, lambda_reg=1e-4):
+    def optimize_rx_sequential(self, H_eff, A_target, max_iters=5000, lr=0.01, lambda_reg=1e-4):
         """
-        Ottimizzazione Sequenziale RX usando Adam. Essenziale per L > 10.
+        Ottimizzazione Sequenziale RX usando Adam. .
         """
         # Fix per il warning PyTorch
         if isinstance(H_eff, torch.Tensor):

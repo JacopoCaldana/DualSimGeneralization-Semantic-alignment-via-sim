@@ -92,9 +92,9 @@ else:
     print(f"✅ Target matrix A calculated (Zero-Shot - PPFE)")
 
 # Real Rayleigh Fading MIMO Channel Generation (as described in Eq. 8)
-#H_mimo = complex_gaussian_matrix(0, 1, size=(384, 384)).to(device)
+H_mimo = complex_gaussian_matrix(0, 1, size=(384, 384)).to(device)
 # ----No Channel---
-H_mimo = torch.eye(384, dtype=torch.complex64, device=device)
+#H_mimo = torch.eye(384, dtype=torch.complex64, device=device)
 
 
 # ============================================================
@@ -156,8 +156,23 @@ print(f"🎯 Baseline (Ideal A_target without channel): {oracle_acc * 100:.2f}%"
 # ============================================================
 
 # --- EXPERIMENT 1 (DISJOINT): Impact of Meta-surface Layers (L) ---
-print(f"🚀 Starting Disjoint Experiment 1: Layers Variation ({ALIGNMENT_TYPE})...")
-data_layers_disjoint = run_experiment_layers_disjoint(
+#print(f"🚀 Starting Disjoint Experiment 1: Layers Variation ({ALIGNMENT_TYPE})...")
+#data_layers_disjoint = run_experiment_layers_disjoint(
+ #   A_target=A_target, 
+  #  H_mimo=H_mimo, 
+   # dm_task=dm_task, 
+   # clf=clf, 
+  #  L_in=L_in, 
+   # mu_in=mu_in, 
+    #L_out=L_out, 
+  #  mu_out=mu_out, 
+   # device=device,
+    #strategy_name=ALIGNMENT_TYPE
+#)
+
+# --- EXPERIMENT 2 (DISJOINT): Impact of Signal-to-Noise Ratio (SNR) ---
+print(f"\n🚀 Starting Disjoint Experiment 2: SNR Sweep ({ALIGNMENT_TYPE})...")
+data_snr_disjoint = run_experiment_snr_disjoint(
     A_target=A_target, 
     H_mimo=H_mimo, 
     dm_task=dm_task, 
@@ -169,21 +184,6 @@ data_layers_disjoint = run_experiment_layers_disjoint(
     device=device,
     strategy_name=ALIGNMENT_TYPE
 )
-
-# --- EXPERIMENT 2 (DISJOINT): Impact of Signal-to-Noise Ratio (SNR) ---
-#print(f"\n🚀 Starting Disjoint Experiment 2: SNR Sweep ({ALIGNMENT_TYPE})...")
-#data_snr_disjoint = run_experiment_snr_disjoint(
- #   A_target=A_target, 
-  #  H_mimo=H_mimo, 
-  #  dm_task=dm_task, 
-   # clf=clf, 
-    #L_in=L_in, 
-  #  mu_in=mu_in, 
-   # L_out=L_out, 
-   # mu_out=mu_out, 
-    #device=device,
-    #strategy_name=ALIGNMENT_TYPE
-#)
 
 
 # ============================================================
