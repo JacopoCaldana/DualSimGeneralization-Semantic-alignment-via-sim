@@ -1,3 +1,5 @@
+import os
+os.environ["PYTORCH_ALLOC_CONF"] = "expandable_segments:True"
 import torch
 import numpy as np
 from pathlib import Path
@@ -112,12 +114,12 @@ print(f"🎯 Baseline (Ideal A_target without channel): {oracle_acc * 100:.2f}%"
 # Decomment the experiment you wish to run
 
 # --- EXPERIMENT 1: Impact of Meta-surface Layers (L) ---
-#print(f"🚀 Starting Experiment 1: Layers Variation ({ALIGNMENT_TYPE})...")
-#data_layers = run_experiment_layers(
- #     A_target=A_target, H_mimo=H_mimo, dm_task=dm_task, clf=clf, 
-  #    L_in=L_in, mu_in=mu_in, L_out=L_out, mu_out=mu_out, device=device,
-   #   strategy_name=ALIGNMENT_TYPE
-#)
+print(f"🚀 Starting Experiment 1: Layers Variation ({ALIGNMENT_TYPE})...")
+data_layers = run_experiment_layers(
+      A_target=A_target, H_mimo=H_mimo, dm_task=dm_task, clf=clf, 
+      L_in=L_in, mu_in=mu_in, L_out=L_out, mu_out=mu_out, device=device,
+      strategy_name=ALIGNMENT_TYPE
+)
 
 # --- EXPERIMENT 2: Impact of Signal-to-Noise Ratio (SNR) ---
 #print(f"\n 🚀 Starting Experiment 2: SNR Sweep ({ALIGNMENT_TYPE})...")
@@ -171,19 +173,19 @@ print(f"🎯 Baseline (Ideal A_target without channel): {oracle_acc * 100:.2f}%"
 #)
 
 # --- EXPERIMENT 2 (DISJOINT): Impact of Signal-to-Noise Ratio (SNR) ---
-print(f"\n🚀 Starting Disjoint Experiment 2: SNR Sweep ({ALIGNMENT_TYPE})...")
-data_snr_disjoint = run_experiment_snr_disjoint(
-    A_target=A_target, 
-    H_mimo=H_mimo, 
-    dm_task=dm_task, 
-    clf=clf, 
-    L_in=L_in, 
-    mu_in=mu_in, 
-    L_out=L_out, 
-    mu_out=mu_out, 
-    device=device,
-    strategy_name=ALIGNMENT_TYPE
-)
+#print(f"\n🚀 Starting Disjoint Experiment 2: SNR Sweep ({ALIGNMENT_TYPE})...")
+#data_snr_disjoint = run_experiment_snr_disjoint(
+#    A_target=A_target, 
+ #   H_mimo=H_mimo, 
+  #  dm_task=dm_task, 
+   # clf=clf, 
+   # L_in=L_in, 
+  #  mu_in=mu_in, 
+   # L_out=L_out, 
+   # mu_out=mu_out, 
+    #device=device,
+    #strategy_name=ALIGNMENT_TYPE
+#)
 
 
 # ============================================================

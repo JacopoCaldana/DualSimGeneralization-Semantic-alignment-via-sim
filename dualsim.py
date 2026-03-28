@@ -210,12 +210,17 @@ class DualSIMoptimizerTorch(nn.Module):
         for i, W in enumerate(sim_cpu.W_RX):
             self.register_buffer(f'W_R_{i}', torch.tensor(W, dtype=torch.complex64))
 
-        # 2. Trainable Parameters: phase shifts xi_T and xi_R
+        # 2. Trainable Parameters: phase shifts xi_T and xi_R (TRANSPARENT INIT)
         self.xi_T = nn.ParameterList([
-            nn.Parameter(torch.tensor(p, dtype=torch.float32)) for p in sim_cpu._phase_shifts_TX
+            # Creiamo un tensore di ZERI con la stessa identica forma di 'p'
+            nn.Parameter(torch.zeros_like(torch.tensor(p, dtype=torch.float32))) 
+            for p in sim_cpu._phase_shifts_TX
         ])
+        
         self.xi_R = nn.ParameterList([
-            nn.Parameter(torch.tensor(p, dtype=torch.float32)) for p in sim_cpu._phase_shifts_RX
+            # Creiamo un tensore di ZERI con la stessa identica forma di 'p'
+            nn.Parameter(torch.zeros_like(torch.tensor(p, dtype=torch.float32))) 
+            for p in sim_cpu._phase_shifts_RX
         ])
 
         
@@ -316,30 +321,38 @@ class DualSIMoptimizerTorch(nn.Module):
         #return loss_history
 
 
-    def optimize_alternating(self, A_target, H_mimo, max_iters, lr=0.1, lambda_reg=1e-4):
+
+    def optimize_alternating(self, A_target, H_mimo, max_iters=2000, lr=0.5, momentum=0.9, lambda_reg=0):
         """
-        Alternating Optimization Algorithm (Projected Gradient Descent).
-        Segue rigorosamente le equazioni del paper:
-        a) Update beta in forma chiusa (fissato per TX e RX nello stesso step).
-        b) Update xi_T tramite gradiente e proiezione [0, 2pi).
-        c) Update xi_R tramite gradiente (usando xi_T aggiornato) e proiezione [0, 2pi).
+        Alternating Optimization Algorithm.
+        Adatta AUTMATICAMENTE il Learning Rate alla profondità dei layer.
         """
         import torch.optim as optim
 
         A_torch = torch.as_tensor(A_target, dtype=torch.complex64)
         H_torch = torch.as_tensor(H_mimo, dtype=torch.complex64)
         
-        # Gradient Descent PURO (SGD) 
-        opt_T = optim.SGD(self.xi_T.parameters(), lr=lr)
-        opt_R = optim.SGD(self.xi_R.parameters(), lr=lr)
+        # 1. Trova automaticamente il numero di layer (L)
+        L_layers = len(self.xi_T)
+        
+        # 2. SCALING AGGRESSIVO PER LAYER PROFONDI
+        # Usiamo l'esponente 1.5 per frenare maggiormente i sistemi molto attenuati
+        dynamic_lr = lr / (L_layers ** 1.3)
+        
+        # 3. Inizializza SGD con il learning rate dinamico scalato
+        opt_T = optim.SGD(self.xi_T.parameters(), lr=dynamic_lr/10, momentum=momentum, nesterov=True)
+        opt_R = optim.SGD(self.xi_R.parameters(), lr=dynamic_lr/10, momentum=momentum, nesterov=True)
+        
+        # 4. Passa il dynamic_lr come picco massimo (max_lr) allo scheduler
+        scheduler_T = optim.lr_scheduler.OneCycleLR(opt_T, max_lr=dynamic_lr, total_steps=max_iters, pct_start=0.2)
+        scheduler_R = optim.lr_scheduler.OneCycleLR(opt_R, max_lr=dynamic_lr, total_steps=max_iters, pct_start=0.2)
         
         loss_history = []
 
         for k in range(max_iters):
-            # --- a) Closed-form update for beta^k (fissato per l'intera iterazione k) ---
+            # --- a) Closed-form update for beta^k ---
             with torch.no_grad():
                 Z_k, _ = self.get_effective_cascade(H_torch)
-                # beta^k = <Z, A> / ||Z||^2
                 num_beta = torch.sum(torch.conj(Z_k) * A_torch)
                 den_beta = torch.sum(torch.conj(Z_k) * Z_k) + 1e-12
                 beta_k = num_beta / den_beta
@@ -350,16 +363,14 @@ class DualSIMoptimizerTorch(nn.Module):
             loss_J_T = torch.norm(beta_k * Z_T - A_torch, p='fro')**2
             loss_J_T.backward()
             
-            # TRUCCO DI STABILITÀ: Normalizzazione del gradiente
             with torch.no_grad():
                 for p in self.xi_T:
                     if p.grad is not None:
-                        # Dividiamo per la norma per forzare il passo a essere grande quanto 'lr'
                         grad_norm = torch.norm(p.grad) + 1e-12
                         p.grad /= grad_norm 
             opt_T.step()
+            scheduler_T.step() # Aggiorna il LR ad ogni singolo step
 
-            # Proiezione [0, 2pi)
             with torch.no_grad():
                 for p in self.xi_T: p.copy_(p % (2 * torch.pi))
 
@@ -370,32 +381,32 @@ class DualSIMoptimizerTorch(nn.Module):
             total_loss_R = loss_J_R + lambda_reg * torch.norm(G_R, p='fro')**2
             total_loss_R.backward()
             
-            # TRUCCO DI STABILITÀ: Normalizzazione del gradiente
             with torch.no_grad():
                 for p in self.xi_R:
                     if p.grad is not None:
                         grad_norm = torch.norm(p.grad) + 1e-12
                         p.grad /= grad_norm
             opt_R.step()
+            scheduler_R.step() # Aggiorna il LR ad ogni singolo step
 
             with torch.no_grad():
                 for p in self.xi_R: p.copy_(p % (2 * torch.pi))
 
             current_loss = loss_J_R.item()
             loss_history.append(current_loss)
-            if k % 50 == 0:
-                print(f"      [Iter {k:4d}/{max_iters}] Semantic Loss: {current_loss:.6f} | Beta Mag: {torch.abs(beta_k).item():.2e}")
             
-        # --- CALCOLO FINALE ERRORE DI FROBENIUS ---
+            # Stampiamo più spesso visto che le iterazioni sono poche
+            if k % 100 == 0:
+                current_lr = opt_T.param_groups[0]['lr']
+                print(f"      [Iter {k:4d}/{max_iters}] Loss: {current_loss:.4f} | LR: {current_lr:.4f} | Beta Mag: {torch.abs(beta_k).item():.2e}")
+            
         with torch.no_grad():
             Z_final, _ = self.get_effective_cascade(H_torch)
             beta_f = torch.sum(torch.conj(Z_final) * A_torch) / (torch.sum(torch.conj(Z_final) * Z_final) + 1e-12)
             fro_err = torch.norm(beta_f * Z_final - A_torch) / torch.norm(A_torch)
-            print(f"   🏁 Optimization Done. Final Relative Frobenius Error: {fro_err.item():.4f}\n")
+            print(f"   🏁 Superfast Optimization Done. Final Relative Error: {fro_err.item():.4f}\n")
             
-        return loss_history    
-      
-    
+        return loss_history
 
 
       

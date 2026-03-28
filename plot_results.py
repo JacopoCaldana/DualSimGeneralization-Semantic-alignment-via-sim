@@ -75,7 +75,7 @@ def plot_exp_layers():
 def plot_comparison_layers():
     """Confronta Linear vs PPFE nello stesso grafico (Accuracy vs Layers)."""
     strategies = ["Linear", "PPFE"]
-    configs = {"16x16": ('tab:blue', 'o'), "32x32": ('tab:orange', 's')}
+    configs = {"16x16": ('tab:blue', 'o'), "32x32": ('tab:orange', 's'),"64x64": ('tab:green','^')}
     
     plt.figure(figsize=(11, 7))
 
@@ -106,7 +106,7 @@ def plot_comparison_layers():
                          alpha=alpha_val,
                          linewidth=2.5)
 
-    plt.axhline(y=95.58, color='black', linestyle=':', alpha=0.5, label='Oracle (95.58%)')
+    plt.axhline(y=95.58, color='black', linestyle=':', alpha=0.5, label='No Missmatch (95.58%)')
     
     plt.title('Strategy Comparison: Accuracy vs SIM Layers ($L$)', fontsize=15, pad=20)
     plt.xlabel('Number of SIM Layers ($L$)', fontsize=12)

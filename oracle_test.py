@@ -51,5 +51,3 @@ def run_oracle_test(dm_task, A_target, L_in, mu_in, L_out, mu_out, clf, device):
     print("------------------------------------------")
     return accuracy
 
-# ESEMPIO DI CHIAMATA:
-#oracle_acc = run_oracle_test(dm_task, A_target, L_in, mu_in, L_out, mu_out, clf, device)

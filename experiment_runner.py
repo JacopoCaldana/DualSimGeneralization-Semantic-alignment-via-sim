@@ -1,6 +1,7 @@
 import torch
 import numpy as np
 import json
+import gc
 from pathlib import Path
 import torch
 import torch.nn as nn
@@ -15,6 +16,43 @@ import matplotlib.pyplot as plt
 from pathlib import Path
 
 from utils import complex_compressed_tensor, decompress_complex_tensor,get_rx_equalizer
+
+
+
+import csv
+import os
+from pathlib import Path
+
+# Headers clonati esattamente dal file di Mario
+CSV_HEADERS = [
+    "Dataset", "Training Label Size", "Grouping", "Method", "Classes", "Seed", "Alignment Type",
+    "Number Proto", "Number Clusters", "Weighted", "Accuracy No Mismatch", "Classifier Loss No Mismatch",
+    "MSE Original No Mimo", "Accuracy Original No Mimo", "Classifier Loss Original No Mimo",
+    "MSE Original Mimo", "Accuracy Original Mimo", "Classifier Loss Original Mimo",
+    "MSE SIM No Mimo", "Accuracy SIM No Mimo", "Classifier Loss SIM No Mimo",
+    "MSE SIM Mimo", "Accuracy SIM Mimo", "Classifier Loss SIM Mimo",
+    "SIM Training Loss", "Receiver Model", "Transmitter Model", "Latent Real Dim",
+    "Latent Complex Dim", "Lambda", "SNR [dB]", "SIM Layers", "SIM Wavelength",
+    "SIM Thickness", "SIM Meta Atoms Intermediate X", "SIM Meta Atoms Intermediate Y",
+    "SIM Spacing Divisor Input", "SIM Spacing Divisor Output", "SIM Spacing Divisor Intermediate",
+    "SIM Meta Atoms Spacing Input X", "SIM Meta Atoms Spacing Input Y",
+    "SIM Meta Atoms Spacing Output X", "SIM Meta Atoms Spacing Output Y",
+    "SIM Meta Atoms Spacing Intermediate X", "SIM Meta Atoms Spacing Intermediate Y",
+    "SIM Learning Rate", "Iterations", "Simulation"
+]
+
+def append_result_to_csv(csv_path, result_data):
+    """Crea il CSV (se non esiste) e fa l'append sicuro di una nuova riga."""
+    file_exists = os.path.isfile(csv_path)
+    # Assicura che tutte le chiavi esistano, altrimenti stringa vuota
+    row_to_write = {header: result_data.get(header, "") for header in CSV_HEADERS}
+    
+    with open(csv_path, mode='a', newline='') as f:
+        writer = csv.DictWriter(f, fieldnames=CSV_HEADERS)
+        if not file_exists:
+            writer.writeheader()
+        writer.writerow(row_to_write)
+        f.flush()
 
 # Set base directory for results
 #BASE_DIR = Path('/Users/jacopocaldana/Desktop/Università/Tesi')
@@ -63,7 +101,7 @@ def plot_and_save_loss(loss_history, filename="loss_plot.png", title="Convergenc
 def run_sim_configuration(
     L, M_int, A_target, H_mimo, snr_list, 
     dm_task, clf, L_in, mu_in, L_out, mu_out, device, 
-    max_iters=5000, lr=0.1
+    max_iters=1000, lr=0.5
 ):
     """
     Trains and evaluates a specific Dual-SIM physical configuration.
@@ -95,10 +133,12 @@ def run_sim_configuration(
     # Convert to PyTorch Model
     model = DualSIMoptimizerTorch(sim_cpu).to(device)
 
-    # 2. Alternating Optimization (Algorithm 2)
     loss_history = model.optimize_alternating(
-        A_target=A_target, H_mimo=H_mimo, 
-        max_iters=max_iters, lr=lr, lambda_reg=1e-4
+        A_target=A_target,
+        H_mimo=H_mimo,
+        max_iters=2000,
+        momentum=0.9,
+        lr=0.5,           # <-- Lascia 0.5! Ci penserà la funzione dentro a dividerlo per il numero di layer
     )
 
     # --- CHECK CONVERGENCE ---
@@ -129,43 +169,111 @@ def run_sim_configuration(
 
     return results, loss_history
 
-def run_experiment_layers(A_target, H_mimo, dm_task, clf, L_in, mu_in, L_out, mu_out, device, strategy_name="Linear"):
-    """
-    EXPERIMENT 1: Accuracy vs Number of SIM Layers (L).
-    Salvataggio differenziato per strategia (Linear/PPFE).
-    """
+def run_experiment_layers(A_target, H_mimo, dm_task, clf, L_in, mu_in, L_out, mu_out, device, strategy_name="Linear", seed=42):
+    import json
+    
     print("\n" + "="*50)
-    print(f"🚀 STARTING EXPERIMENT 1: ACCURACY vs LAYERS (L) | Strategy: {strategy_name}")
+    print(f"🚀 STARTING EXPERIMENT 1: ACCURACY vs LAYERS (L) | Strategy: {strategy_name} | Seed: {seed}")
     print("="*50)
     
-    layer_list = [2, 5, 10, 15, 20, 25]
-    atoms_list = [16, 32] 
+    layer_list = [20]
+    #layer_list = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 15, 20]
+    atoms_list = [64] 
     snr_eval = [None]
     
-    results_layers = {}
+    max_iters_run = 2000
+    base_lr = 0.5 
+    
+    # --- PARAMETRI FISICI FISSI ---
+    wavelength = 0.005        # 5mm (60 GHz)
+    slayer = 5 * wavelength   # Distanza tra i layer (0.025)
+    dx = wavelength / 2       # Spaziatura dei meta-atomi (0.0025)
+    
+    csv_filename = f"final_results_{strategy_name}.csv"
+    json_filename = f"results_layers_{strategy_name}.json"
+
+    # 2. RECUPERA IL VECCHIO JSON (per non sovrascriverlo)
+    if os.path.exists(json_filename):
+        with open(json_filename, "r") as f:
+            results_layers = json.load(f)
+        print("📥 JSON precedente caricato correttamente. Aggiungo il nuovo dato...")
+    else:
+        results_layers = {}
+
+    # --- DATI STATICI DELLA RUN ---
+    base_run_data = {
+        "Dataset": "CIFAR-10",
+        "Classes": 10,
+        "Seed": seed,
+        "Alignment Type": strategy_name,
+        "Iterations": max_iters_run,
+        "Simulation": "DualSIM_Superfast_L1.3",
+        
+        # Inserimento dei parametri fisici
+        "SIM Wavelength": wavelength,
+        "SIM Thickness": slayer,
+        
+        # Assegnazione di dx alla spaziatura della griglia
+        "SIM Meta Atoms Spacing Intermediate X": dx,
+        "SIM Meta Atoms Spacing Intermediate Y": dx,
+        
+        # Opzionale: se i layer di Input/Output hanno la stessa spaziatura, lo mappiamo anche qui
+        "SIM Meta Atoms Spacing Input X": dx,
+        "SIM Meta Atoms Spacing Input Y": dx,
+        "SIM Meta Atoms Spacing Output X": dx,
+        "SIM Meta Atoms Spacing Output Y": dx,
+    }
 
     for M_int in atoms_list:
         results_layers[f"{M_int}x{M_int}"] = {}
         for L in layer_list:
             print(f"\n🔄 Testing Config: {M_int}x{M_int} Meta-atoms | L = {L} Layers")
             
-            acc_dict, _ = run_sim_configuration(
+            # Lancio della simulazione
+            acc_dict, loss_history = run_sim_configuration(
                 L=L, M_int=M_int, A_target=A_target, H_mimo=H_mimo, 
                 snr_list=snr_eval, dm_task=dm_task, clf=clf, 
                 L_in=L_in, mu_in=mu_in, L_out=L_out, mu_out=mu_out, 
-                device=device, max_iters=5000
+                device=device, max_iters=max_iters_run
             )
             
+            # Estrazione risultati
             acc_val = acc_dict["Inf"]
+            final_loss = loss_history[-1] if loss_history else 0.0
             results_layers[f"{M_int}x{M_int}"][str(L)] = acc_val
-            print(f"✅ Result: Accuracy = {acc_val:.2f}%")
             
-            # --- SALVATAGGIO DINAMICO ---
-            filename = BASE_DIR / f"results_layers_{strategy_name}.json"
-            with open(filename, "w") as f:
+            print(f"✅ Result: Accuracy = {acc_val:.2f}% | Final Loss = {final_loss:.4f}")
+            
+            # --- DATI DINAMICI DELLA RUN ---
+            actual_lr = base_lr / (L ** 1.3)
+            
+            current_run_data = base_run_data.copy()
+            current_run_data.update({
+                "SIM Layers": L,
+                "SIM Meta Atoms Intermediate X": M_int,
+                "SIM Meta Atoms Intermediate Y": M_int,
+                "SIM Learning Rate": actual_lr,
+                "SIM Training Loss": final_loss,
+                "Accuracy SIM Mimo": acc_val
+            })
+            
+            # Salva la riga nel CSV
+            append_result_to_csv(csv_filename, current_run_data)
+            
+            # Salva il backup in JSON
+            with open(json_filename, "w") as f:
                 json.dump(results_layers, f, indent=4)
+
+            # ==========================================
+            # 🧹 PULIZIA DELLA MEMORIA
+            # ==========================================
+            del acc_dict
+            del loss_history
+            gc.collect()
+            torch.cuda.empty_cache()
+            print(f"🧹 VRAM Flushed.")    
                 
-    print(f"\n🎯 EXPERIMENT 1 COMPLETED! Data saved to {filename.name}")
+    print(f"\n🎯 EXPERIMENT 1 COMPLETED! Data saved to {csv_filename} and {json_filename}")
     return results_layers
 
 def run_experiment_snr(A_target, H_mimo, dm_task, clf, L_in, mu_in, L_out, mu_out, device, strategy_name="Linear"):
