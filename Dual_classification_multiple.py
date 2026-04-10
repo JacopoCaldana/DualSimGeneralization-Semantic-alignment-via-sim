@@ -2,6 +2,7 @@ import os
 os.environ["PYTORCH_ALLOC_CONF"] = "expandable_segments:True"
 import torch
 import numpy as np
+import random
 from pathlib import Path
 
 # --- Local Modules Import ---
@@ -20,13 +21,13 @@ from oracle_test import run_oracle_test
 from experiment_runner import run_experiment_layers, run_experiment_snr, run_experiment_1_mono_sim, run_sim_configuration_asymmetric,run_experiment_rx_depth,run_experiment_tx_depth, run_experiment_layers_disjoint
 from experiment_runner import run_experiment_layers_disjoint,run_experiment_snr_disjoint
 
+
+
 # ============================================================
-# 1. ENVIRONMENT SETUP AND PATHS
+# 0. SETUP DEI SEED (Multi-Run)
 # ============================================================
-SEED = 42
-torch.manual_seed(SEED)
-np.random.seed(SEED)
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+# Aggiungi o rimuovi i seed da questa lista in base a quante run vuoi fare
+SEED_LIST = [27, 42, 123]
 
 # Absolute paths for project structure
 #BASE_DIR = Path('/Users/jacopocaldana/Desktop/Università/Tesi')
@@ -36,176 +37,166 @@ MODEL_PATH = BASE_DIR / 'models'
 # Encoder names used to build the checkpoint path
 TX_NAME = "vit_small_patch16_224" 
 RX_NAME = "vit_base_patch16_224" 
-CLF_PATH = MODEL_PATH / "data" / "classifiers" / "cifar10" / RX_NAME / f"seed_{SEED}.ckpt"
-
-print(f"🔍 Preliminary classifier check...")
-if not CLF_PATH.exists():
-    raise FileNotFoundError(f"Critical Error: Checkpoint does not exist at {CLF_PATH}. "
-                            "Please verify the model folder before starting.")
-print("✅ Checkpoint found. Proceeding...")
 
 
 # ============================================================
-# 2. DATA AND CLASSIFIER LOADING
+# 🌀 CICLO MASTER: Ripete tutto l'ambiente per ogni seed
 # ============================================================
-print("⏳ Loading Datamodules...")
+for current_seed in SEED_LIST:
+    print("\n" + "#"*60)
+    print(f"🌍 INIZIO RUN COMPLETA PER SEED: {current_seed}")
+    print("#"*60)
 
-TRAIN_SIZE_PER_CLASS = 4200
-# Datamodule for Semantic Alignment (using a limited set of pilots)
-dm_align = DataModuleAlignmentClassification(
-    dataset="cifar10", tx_enc=TX_NAME, rx_enc=RX_NAME,      
-    train_label_size=TRAIN_SIZE_PER_CLASS, method='centroid', batch_size=128, seed=SEED
-)
-dm_align.setup()
+    # 1. ENVIRONMENT SETUP
+    torch.manual_seed(current_seed)
+    np.random.seed(current_seed)
+    random.seed(current_seed)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-# Datamodule for the classification task evaluation
-dm_task = DataModuleClassifier(dataset="cifar10", rx_enc=TX_NAME, batch_size=128)
-dm_task.setup()
+    CLF_PATH = MODEL_PATH / "data" / "classifiers" / "cifar10" / RX_NAME / f"seed_{current_seed}.ckpt"
 
-# Load pre-trained classifier to the compute device
-clf = Classifier.load_from_checkpoint(CLF_PATH).to(device).eval()
+    print(f"🔍 Preliminary classifier check...")
+    if not CLF_PATH.exists():
+        raise FileNotFoundError(f"Critical Error: Checkpoint does not exist at {CLF_PATH}. "
+                                "Please verify the model folder before starting.")
+    print("✅ Checkpoint found. Proceeding...")
 
 
-# ============================================================
-# 3. CALCULATION OF TARGET MATRIX A AND CHANNEL H
-# ============================================================
-# Complex Compression: Mapping real features to the complex domain
-input_c = complex_compressed_tensor(dm_align.train_data.z_tx.T, device=device)
-output_c = complex_compressed_tensor(dm_align.train_data.z_rx.T, device=device)
+    # ============================================================
+    # 2. DATA AND CLASSIFIER LOADING
+    # ============================================================
+    print("⏳ Loading Datamodules...")
 
-# Pre-whitening: Normalizing the latent spaces
-input_w, L_in, mu_in = prewhiten(input_c, device=device) 
-output_w, L_out, mu_out = prewhiten(output_c, device=device)
-
-# --- ALIGNMENT STRATEGY SELECTION ---
-ALIGNMENT_TYPE = 'PPFE'  # Set to 'PPFE' for Zero-Shot alignment
-
-if ALIGNMENT_TYPE == 'Linear':
-    # Supervised Ridge Regression to find the mapping between spaces
-    A_target = ridge_regression(input_w, output_w, lmb=1e-3)
-    print(f"✅ Target matrix A calculated (Supervised - Linear)")
-else:
-    # Prototype-based Parseval Frame Equalization (Zero-Shot)
-    A_target = ppfe(
-        input_w, output_w, 
-        output_real=dm_align.train_data.z_rx, 
-        n_clusters=20, n_proto=1000, seed=SEED
+    TRAIN_SIZE_PER_CLASS = 4200
+    # Datamodule for Semantic Alignment (using a limited set of pilots)
+    dm_align = DataModuleAlignmentClassification(
+        dataset="cifar10", tx_enc=TX_NAME, rx_enc=RX_NAME,      
+        train_label_size=TRAIN_SIZE_PER_CLASS, method='centroid', batch_size=128, seed=current_seed
     )
-    print(f"✅ Target matrix A calculated (Zero-Shot - PPFE)")
+    dm_align.setup()
 
-# Real Rayleigh Fading MIMO Channel Generation (as described in Eq. 8)
-H_mimo = complex_gaussian_matrix(0, 1, size=(384, 384)).to(device)
-# ----No Channel---
-#H_mimo = torch.eye(384, dtype=torch.complex64, device=device)
+    # Datamodule for the classification task evaluation
+    dm_task = DataModuleClassifier(dataset="cifar10", rx_enc=TX_NAME, batch_size=128)
+    dm_task.setup()
 
-
-# ============================================================
-# 4. BASELINE CALCULATION (ORACLE)
-# ============================================================
-print("\n🔮 Calculating Baseline Accuracy (Oracle)...")
-# The Oracle represents the ideal software-only performance without the SIM hardware constraints
-oracle_acc = run_oracle_test(dm_task, A_target, L_in, mu_in, L_out, mu_out, clf, device)
-print(f"🎯 Baseline (Ideal A_target without channel): {oracle_acc * 100:.2f}%")
+    # Load pre-trained classifier to the compute device
+    clf = Classifier.load_from_checkpoint(CLF_PATH).to(device).eval()
 
 
-# ============================================================
-# 5. EXPERIMENT EXECUTION
-# ============================================================
-# Decomment the experiment you wish to run
+    # ============================================================
+    # 3. CALCULATION OF TARGET MATRIX A AND CHANNEL H
+    # ============================================================
+    # Complex Compression: Mapping real features to the complex domain
+    input_c = complex_compressed_tensor(dm_align.train_data.z_tx.T, device=device)
+    output_c = complex_compressed_tensor(dm_align.train_data.z_rx.T, device=device)
 
-# --- EXPERIMENT 1: Impact of Meta-surface Layers (L) ---
-print(f"🚀 Starting Experiment 1: Layers Variation ({ALIGNMENT_TYPE})...")
-data_layers = run_experiment_layers(
-      A_target=A_target, H_mimo=H_mimo, dm_task=dm_task, clf=clf, 
-      L_in=L_in, mu_in=mu_in, L_out=L_out, mu_out=mu_out, device=device,
-      strategy_name=ALIGNMENT_TYPE
-)
+    # Pre-whitening: Normalizing the latent spaces
+    input_w, L_in, mu_in = prewhiten(input_c, device=device) 
+    output_w, L_out, mu_out = prewhiten(output_c, device=device)
 
-# --- EXPERIMENT 2: Impact of Signal-to-Noise Ratio (SNR) ---
-#print(f"\n 🚀 Starting Experiment 2: SNR Sweep ({ALIGNMENT_TYPE})...")
-#data_snr = run_experiment_snr(
- #    A_target=A_target, H_mimo=H_mimo, dm_task=dm_task, clf=clf, 
-  #   L_in=L_in, mu_in=mu_in, L_out=L_out, mu_out=mu_out, device=device,
-   #  strategy_name=ALIGNMENT_TYPE
-#)
+    # --- ALIGNMENT STRATEGY SELECTION ---
+    ALIGNMENT_TYPE = 'PPFE'  # Set to 'PPFE' for Zero-Shot alignment
 
-# --- MONO-SIM ABLATION STUDY ---
-# print(f"\n 🚀 Starting Mono-SIM Ablation Study ({ALIGNMENT_TYPE})...")
-# data_mono = run_experiment_1_mono_sim(
-#     A_target=A_target, dm_task=dm_task, clf=clf, 
-#     L_in=L_in, mu_in=mu_in, L_out=L_out, mu_out=mu_out, device=device,
-#     strategy_name=ALIGNMENT_TYPE
-# )
+    if ALIGNMENT_TYPE == 'Linear':
+        # Supervised Ridge Regression to find the mapping between spaces
+        A_target = ridge_regression(input_w, output_w, lmb=1e-3)
+        print(f"✅ Target matrix A calculated (Supervised - Linear)")
+    else:
+        # Prototype-based Parseval Frame Equalization (Zero-Shot)
+        A_target = ppfe(
+            input_w, output_w, 
+            output_real=dm_align.train_data.z_rx, 
+            n_clusters=20, n_proto=1000, seed=current_seed
+        )
+        print(f"✅ Target matrix A calculated (Zero-Shot - PPFE)")
 
-# --- ASYMMETRIC RX DEPTH ---
-# print(f"🚀 Starting Asymmetric RX experiment ({ALIGNMENT_TYPE})..")
-# data_asym = run_experiment_rx_depth(
-#     A_target=A_target, H_mimo=H_mimo, dm_task=dm_task, clf=clf, 
-#     L_in=L_in, mu_in=mu_in, L_out=L_out, mu_out=mu_out, device=device,
-#     strategy_name=ALIGNMENT_TYPE
-# )
-
-# --- ASYMMETRIC TX DEPTH ---
-# print(f"🚀 Starting Asymmetric TX experiment ({ALIGNMENT_TYPE})..")
-# data_tx_var = run_experiment_tx_depth(
-#     A_target=A_target, H_mimo=H_mimo, dm_task=dm_task, clf=clf, 
-#     L_in=L_in, mu_in=mu_in, L_out=L_out, mu_out=mu_out, device=device,
-#     strategy_name=ALIGNMENT_TYPE
-# )
-
-# ============================================================
-#  DISJOINT OPTIMIZATION EXPERIMENTS 
-# ============================================================
-
-# --- EXPERIMENT 1 (DISJOINT): Impact of Meta-surface Layers (L) ---
-#print(f"🚀 Starting Disjoint Experiment 1: Layers Variation ({ALIGNMENT_TYPE})...")
-#data_layers_disjoint = run_experiment_layers_disjoint(
- #   A_target=A_target, 
-  #  H_mimo=H_mimo, 
-   # dm_task=dm_task, 
-   # clf=clf, 
-  #  L_in=L_in, 
-   # mu_in=mu_in, 
-    #L_out=L_out, 
-  #  mu_out=mu_out, 
-   # device=device,
-    #strategy_name=ALIGNMENT_TYPE
-#)
-
-# --- EXPERIMENT 2 (DISJOINT): Impact of Signal-to-Noise Ratio (SNR) ---
-#print(f"\n🚀 Starting Disjoint Experiment 2: SNR Sweep ({ALIGNMENT_TYPE})...")
-#data_snr_disjoint = run_experiment_snr_disjoint(
-#    A_target=A_target, 
- #   H_mimo=H_mimo, 
-  #  dm_task=dm_task, 
-   # clf=clf, 
-   # L_in=L_in, 
-  #  mu_in=mu_in, 
-   # L_out=L_out, 
-   # mu_out=mu_out, 
-    #device=device,
-    #strategy_name=ALIGNMENT_TYPE
-#)
+    # Real Rayleigh Fading MIMO Channel Generation
+    H_mimo = complex_gaussian_matrix(0, 1, size=(384, 384)).to(device)
+    # ----No Channel---
+    #H_mimo = torch.eye(384, dtype=torch.complex64, device=device)
 
 
-# ============================================================
-# 6. HYPERPARAMETER OPTIMIZATION: LR vs DEPTH (Grid Search)
-# ============================================================
+    # ============================================================
+    # 4. BASELINE CALCULATION (ORACLE)
+    # ============================================================
+    print(f"\n🔮 Calculating Baseline Accuracy (Oracle) for Seed {current_seed}...")
+    # The Oracle represents the ideal software-only performance without the SIM hardware constraints
+    oracle_acc = run_oracle_test(dm_task, A_target, L_in, mu_in, L_out, mu_out, clf, device)
+    print(f"🎯 Baseline (Ideal A_target without channel): {oracle_acc * 100:.2f}%")
 
-# Questo esperimento serve a trovare il Learning Rate ottimale per diverse
-# profondità (L=2, 10, 25), evitando stalli o oscillazioni numeriche.
 
-#print(f"\n 🔍 Starting Cross-Grid Search: Layers vs Learning Rate (Strategy: {ALIGNMENT_TYPE})...")
+    # ============================================================
+    # 5. EXPERIMENT EXECUTION
+    # ============================================================
+    
+    # --- EXPERIMENT 1: Impact of Meta-surface Layers (L) ---
+    print(f"🚀 Starting Experiment 1: Layers Variation ({ALIGNMENT_TYPE})...")
+    data_layers = run_experiment_layers(
+          A_target=A_target, H_mimo=H_mimo, dm_task=dm_task, clf=clf, 
+          L_in=L_in, mu_in=mu_in, L_out=L_out, mu_out=mu_out, device=device,
+          strategy_name=ALIGNMENT_TYPE, seed=current_seed
+    )
 
-#grid_results = run_lr_depth_grid_search(
- #   A_target=A_target, 
-  #  H_mimo=H_mimo, 
-   # dm_task=dm_task, 
-    #clf=clf, 
-  #  L_in=L_in, mu_in=mu_in, 
-   # L_out=L_out, mu_out=mu_out, 
-    #device=device,
-    #strategy_name=ALIGNMENT_TYPE
-#)
+    # --- EXPERIMENT 2: Impact of Signal-to-Noise Ratio (SNR) ---
+    # print(f"\n 🚀 Starting Experiment 2: SNR Sweep ({ALIGNMENT_TYPE})...")
+    # data_snr = run_experiment_snr(
+    #     A_target=A_target, H_mimo=H_mimo, dm_task=dm_task, clf=clf, 
+    #     L_in=L_in, mu_in=mu_in, L_out=L_out, mu_out=mu_out, device=device,
+    #     strategy_name=ALIGNMENT_TYPE, seed=current_seed
+    # )
 
-#print(f"\n ✅ Grid Search Completed. Results saved to: grid_search_L_vs_LR_{ALIGNMENT_TYPE}.json")
+    # --- MONO-SIM ABLATION STUDY ---
+    # print(f"\n 🚀 Starting Mono-SIM Ablation Study ({ALIGNMENT_TYPE})...")
+    # data_mono = run_experiment_1_mono_sim(
+    #     A_target=A_target, dm_task=dm_task, clf=clf, 
+    #     L_in=L_in, mu_in=mu_in, L_out=L_out, mu_out=mu_out, device=device,
+    #     strategy_name=ALIGNMENT_TYPE, seed=current_seed
+    # )
+
+    # --- ASYMMETRIC RX DEPTH ---
+    # print(f"🚀 Starting Asymmetric RX experiment ({ALIGNMENT_TYPE})..")
+    # data_asym = run_experiment_rx_depth(
+    #     A_target=A_target, H_mimo=H_mimo, dm_task=dm_task, clf=clf, 
+    #     L_in=L_in, mu_in=mu_in, L_out=L_out, mu_out=mu_out, device=device,
+    #     strategy_name=ALIGNMENT_TYPE, seed=current_seed
+    # )
+
+    # --- ASYMMETRIC TX DEPTH ---
+    # print(f"🚀 Starting Asymmetric TX experiment ({ALIGNMENT_TYPE})..")
+    # data_tx_var = run_experiment_tx_depth(
+    #     A_target=A_target, H_mimo=H_mimo, dm_task=dm_task, clf=clf, 
+    #     L_in=L_in, mu_in=mu_in, L_out=L_out, mu_out=mu_out, device=device,
+    #     strategy_name=ALIGNMENT_TYPE, seed=current_seed
+    # )
+
+    # ============================================================
+    #  DISJOINT OPTIMIZATION EXPERIMENTS 
+    # ============================================================
+
+    # --- EXPERIMENT 1 (DISJOINT): Impact of Meta-surface Layers (L) ---
+    # print(f"🚀 Starting Disjoint Experiment 1: Layers Variation ({ALIGNMENT_TYPE})...")
+    # data_layers_disjoint = run_experiment_layers_disjoint(
+    #     A_target=A_target, H_mimo=H_mimo, dm_task=dm_task, clf=clf, 
+    #     L_in=L_in, mu_in=mu_in, L_out=L_out, mu_out=mu_out, device=device,
+    #     strategy_name=ALIGNMENT_TYPE, seed=current_seed
+    # )
+
+    # --- EXPERIMENT 2 (DISJOINT): Impact of Signal-to-Noise Ratio (SNR) ---
+    # print(f"\n🚀 Starting Disjoint Experiment 2: SNR Sweep ({ALIGNMENT_TYPE})...")
+    # data_snr_disjoint = run_experiment_snr_disjoint(
+    #     A_target=A_target, H_mimo=H_mimo, dm_task=dm_task, clf=clf, 
+    #     L_in=L_in, mu_in=mu_in, L_out=L_out, mu_out=mu_out, device=device,
+    #     strategy_name=ALIGNMENT_TYPE, seed=current_seed
+    # )
+
+
+    # ============================================================
+    # 6. HYPERPARAMETER OPTIMIZATION: LR vs DEPTH (Grid Search)
+    # ============================================================
+    # print(f"\n 🔍 Starting Cross-Grid Search: Layers vs Learning Rate (Strategy: {ALIGNMENT_TYPE})...")
+    # grid_results = run_lr_depth_grid_search(
+    #     A_target=A_target, H_mimo=H_mimo, dm_task=dm_task, clf=clf, 
+    #     L_in=L_in, mu_in=mu_in, L_out=L_out, mu_out=mu_out, device=device,
+    #     strategy_name=ALIGNMENT_TYPE, seed=current_seed
+    # )
+    # print(f"\n ✅ Grid Search Completed. Results saved to: grid_search_L_vs_LR_{ALIGNMENT_TYPE}_seed{current_seed}.json")

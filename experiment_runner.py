@@ -2,6 +2,7 @@ import torch
 import numpy as np
 import json
 import gc
+import random
 from pathlib import Path
 import torch
 import torch.nn as nn
@@ -98,18 +99,27 @@ def plot_and_save_loss(loss_history, filename="loss_plot.png", title="Convergenc
     plt.close()
     print(f"✅ Convergence plot saved to: {filename}")
 
+
+
 def run_sim_configuration(
     L, M_int, A_target, H_mimo, snr_list, 
     dm_task, clf, L_in, mu_in, L_out, mu_out, device, 
-    max_iters=1000, lr=0.5
+    max_iters=3000, lr=0.1, seed=42  # <--- DEFAULT SICURO
 ):
     """
     Trains and evaluates a specific Dual-SIM physical configuration.
     Returns a dictionary containing accuracy results for each requested SNR.
     """
+    # 0. RESET FISICO DEI SEED (Vitale per il multi-run)
+    torch.manual_seed(seed)
+    np.random.seed(seed)
+    random.seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+
     wavelength = 0.005  # 5mm (60 GHz)
     slayer = 5 * wavelength 
-    dx = wavelength / 2 
+    dx = wavelength / 2  
 
     # 1. Physical Initialization (NumPy-based)
     sim_cpu = DualSIMoptimizer(
@@ -133,19 +143,17 @@ def run_sim_configuration(
     # Convert to PyTorch Model
     model = DualSIMoptimizerTorch(sim_cpu).to(device)
 
+    # 2. Ottimizzazione (Variabili Collegate!)
     loss_history = model.optimize_alternating(
         A_target=A_target,
         H_mimo=H_mimo,
-        max_iters=2000,
-        momentum=0.9,
-        lr=0.5,           # <-- Lascia 0.5! Ci penserà la funzione dentro a dividerlo per il numero di layer
+        max_iters=max_iters,
+        lr=lr,               # <--- Dinamico
     )
 
     # --- CHECK CONVERGENCE ---
-    
-    plot_filename = BASE_DIR / f"loss_plot_L{L}_M{M_int}.png"
-    plot_title = f"Convergence: Layers={L}, Atoms={M_int}x{M_int} (iters={max_iters}, lr={lr})"
-    
+    plot_filename = BASE_DIR / f"loss_plot_seed{seed}_L{L}_M{M_int}.png"
+    plot_title = f"Seed {seed} | L={L}, Atoms={M_int}x{M_int} (iters={max_iters}, lr={lr:.4f})"
     plot_and_save_loss(loss_history, filename=plot_filename, title=plot_title)
     # ----------------------------------------
 
@@ -163,44 +171,39 @@ def run_sim_configuration(
             L_in=L_in, mu_in=mu_in, L_out=L_out, mu_out=mu_out, 
             clf=clf, device=device
         )
-        # Use "Inf" string for JSON compatibility if SNR is None (infinite)
         snr_key = "Inf" if snr is None else str(snr)
         results[snr_key] = acc * 100
 
     return results, loss_history
 
+
 def run_experiment_layers(A_target, H_mimo, dm_task, clf, L_in, mu_in, L_out, mu_out, device, strategy_name="Linear", seed=42):
-    import json
     
     print("\n" + "="*50)
     print(f"🚀 STARTING EXPERIMENT 1: ACCURACY vs LAYERS (L) | Strategy: {strategy_name} | Seed: {seed}")
     print("="*50)
     
-    layer_list = [20]
-    #layer_list = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 15, 20]
-    atoms_list = [64] 
+    layer_list = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 15, 20]
+    #layer_list= [20]
+    atoms_list = [16, 32, 64] 
     snr_eval = [None]
     
-    max_iters_run = 2000
-    base_lr = 0.5 
+    max_iters_run = 3000
+    base_lr = 0.1
     
-    # --- PARAMETRI FISICI FISSI ---
-    wavelength = 0.005        # 5mm (60 GHz)
-    slayer = 5 * wavelength   # Distanza tra i layer (0.025)
-    dx = wavelength / 2       # Spaziatura dei meta-atomi (0.0025)
+    wavelength = 0.005
+    slayer = 5 * wavelength
+    dx = wavelength / 2
     
     csv_filename = f"final_results_{strategy_name}.csv"
-    json_filename = f"results_layers_{strategy_name}.json"
+    json_filename = f"results_layers_{strategy_name}_seed{seed}.json" # Separato per seed
 
-    # 2. RECUPERA IL VECCHIO JSON (per non sovrascriverlo)
     if os.path.exists(json_filename):
         with open(json_filename, "r") as f:
             results_layers = json.load(f)
-        print("📥 JSON precedente caricato correttamente. Aggiungo il nuovo dato...")
     else:
         results_layers = {}
 
-    # --- DATI STATICI DELLA RUN ---
     base_run_data = {
         "Dataset": "CIFAR-10",
         "Classes": 10,
@@ -208,16 +211,10 @@ def run_experiment_layers(A_target, H_mimo, dm_task, clf, L_in, mu_in, L_out, mu
         "Alignment Type": strategy_name,
         "Iterations": max_iters_run,
         "Simulation": "DualSIM_Superfast_L1.3",
-        
-        # Inserimento dei parametri fisici
         "SIM Wavelength": wavelength,
         "SIM Thickness": slayer,
-        
-        # Assegnazione di dx alla spaziatura della griglia
         "SIM Meta Atoms Spacing Intermediate X": dx,
         "SIM Meta Atoms Spacing Intermediate Y": dx,
-        
-        # Opzionale: se i layer di Input/Output hanno la stessa spaziatura, lo mappiamo anche qui
         "SIM Meta Atoms Spacing Input X": dx,
         "SIM Meta Atoms Spacing Input Y": dx,
         "SIM Meta Atoms Spacing Output X": dx,
@@ -225,27 +222,28 @@ def run_experiment_layers(A_target, H_mimo, dm_task, clf, L_in, mu_in, L_out, mu
     }
 
     for M_int in atoms_list:
-        results_layers[f"{M_int}x{M_int}"] = {}
+        if f"{M_int}x{M_int}" not in results_layers:
+            results_layers[f"{M_int}x{M_int}"] = {}
+            
         for L in layer_list:
             print(f"\n🔄 Testing Config: {M_int}x{M_int} Meta-atoms | L = {L} Layers")
             
-            # Lancio della simulazione
+            actual_lr = base_lr / (L ** 1.3)
+            
+            # --- INIEZIONE DEL SEED E DEL LR ---
             acc_dict, loss_history = run_sim_configuration(
                 L=L, M_int=M_int, A_target=A_target, H_mimo=H_mimo, 
                 snr_list=snr_eval, dm_task=dm_task, clf=clf, 
                 L_in=L_in, mu_in=mu_in, L_out=L_out, mu_out=mu_out, 
-                device=device, max_iters=max_iters_run
+                device=device, max_iters=max_iters_run,
+                lr=actual_lr, seed=seed 
             )
             
-            # Estrazione risultati
             acc_val = acc_dict["Inf"]
             final_loss = loss_history[-1] if loss_history else 0.0
             results_layers[f"{M_int}x{M_int}"][str(L)] = acc_val
             
             print(f"✅ Result: Accuracy = {acc_val:.2f}% | Final Loss = {final_loss:.4f}")
-            
-            # --- DATI DINAMICI DELLA RUN ---
-            actual_lr = base_lr / (L ** 1.3)
             
             current_run_data = base_run_data.copy()
             current_run_data.update({
@@ -257,61 +255,100 @@ def run_experiment_layers(A_target, H_mimo, dm_task, clf, L_in, mu_in, L_out, mu
                 "Accuracy SIM Mimo": acc_val
             })
             
-            # Salva la riga nel CSV
             append_result_to_csv(csv_filename, current_run_data)
             
-            # Salva il backup in JSON
             with open(json_filename, "w") as f:
                 json.dump(results_layers, f, indent=4)
 
-            # ==========================================
-            # 🧹 PULIZIA DELLA MEMORIA
-            # ==========================================
-            del acc_dict
-            del loss_history
+            # 🧹 PULIZIA MEMORIA
+            del acc_dict, loss_history
             gc.collect()
             torch.cuda.empty_cache()
-            print(f"🧹 VRAM Flushed.")    
                 
     print(f"\n🎯 EXPERIMENT 1 COMPLETED! Data saved to {csv_filename} and {json_filename}")
     return results_layers
 
-def run_experiment_snr(A_target, H_mimo, dm_task, clf, L_in, mu_in, L_out, mu_out, device, strategy_name="Linear"):
-    """
-    EXPERIMENT 2: Accuracy vs Signal-to-Noise Ratio (SNR).
-    Salvataggio differenziato per strategia (Linear/PPFE).
-    """
+
+def run_experiment_snr(A_target, H_mimo, dm_task, clf, L_in, mu_in, L_out, mu_out, device, strategy_name="Linear", seed=42):
+    
     print("\n" + "="*50)
-    print(f"🚀 STARTING EXPERIMENT 2: ACCURACY vs SNR | Strategy: {strategy_name}")
+    print(f"🚀 STARTING EXPERIMENT 2: ACCURACY vs SNR | Strategy: {strategy_name} | Seed: {seed}")
     print("="*50)
     
     L_fixed = 10
     atoms_list = [16, 32]
     snr_list = [-30, -20, -10, 0, 10, 20, 30]
     
-    results_snr = {}
+    max_iters_run = 3000
+    base_lr = 0.3
+    actual_lr = base_lr / (L_fixed ** 1.3)
+    
+    wavelength = 0.005
+    slayer = 5 * wavelength
+    dx = wavelength / 2
+    
+    csv_filename = f"final_results_snr_{strategy_name}.csv"
+    json_filename = f"results_snr_{strategy_name}_seed{seed}.json"
+    
+    if os.path.exists(json_filename):
+        with open(json_filename, "r") as f:
+            results_snr = json.load(f)
+    else:
+        results_snr = {}
+
+    base_run_data = {
+        "Dataset": "CIFAR-10",
+        "Classes": 10,
+        "Seed": seed,
+        "Alignment Type": strategy_name,
+        "Iterations": max_iters_run,
+        "Simulation": "DualSIM_Superfast_L1.3_SNR",
+        "SIM Layers": L_fixed,
+        "SIM Learning Rate": actual_lr,
+        "SIM Wavelength": wavelength,
+        "SIM Thickness": slayer,
+        "SIM Meta Atoms Spacing Intermediate X": dx,
+        "SIM Meta Atoms Spacing Intermediate Y": dx,
+    }
 
     for M_int in atoms_list:
         print(f"\n🔄 Testing Config: {M_int}x{M_int} Meta-atoms | L = {L_fixed} (Fixed)")
         
-        acc_dict, _ = run_sim_configuration(
+        # --- INIEZIONE DEL SEED E DEL LR ---
+        acc_dict, loss_history = run_sim_configuration(
             L=L_fixed, M_int=M_int, A_target=A_target, H_mimo=H_mimo, 
             snr_list=snr_list, dm_task=dm_task, clf=clf, 
             L_in=L_in, mu_in=mu_in, L_out=L_out, mu_out=mu_out, 
-            device=device, max_iters=5000
+            device=device, max_iters=max_iters_run,
+            lr=actual_lr, seed=seed
         )
         
+        final_loss = loss_history[-1] if loss_history else 0.0
         results_snr[f"{M_int}x{M_int}"] = acc_dict
         
+        # Salviamo sul CSV una riga per ogni livello di SNR testato
         for snr_val, acc_val in acc_dict.items():
             print(f"  - SNR {snr_val:>3} dB : {acc_val:.2f}%")
             
-        # --- SALVATAGGIO DINAMICO ---
-        filename = BASE_DIR / f"results_snr_{strategy_name}.json"
-        with open(filename, "w") as f:
+            current_run_data = base_run_data.copy()
+            current_run_data.update({
+                "SIM Meta Atoms Intermediate X": M_int,
+                "SIM Meta Atoms Intermediate Y": M_int,
+                "SIM Training Loss": final_loss,
+                "SNR [dB]": snr_val if snr_val != "Inf" else "",
+                "Accuracy SIM Mimo": acc_val
+            })
+            append_result_to_csv(csv_filename, current_run_data)
+            
+        with open(json_filename, "w") as f:
             json.dump(results_snr, f, indent=4)
             
-    print(f"\n🎯 EXPERIMENT 2 COMPLETED! Data saved to {filename.name}")
+        # 🧹 PULIZIA MEMORIA
+        del acc_dict, loss_history
+        gc.collect()
+        torch.cuda.empty_cache()
+            
+    print(f"\n🎯 EXPERIMENT 2 COMPLETED! Data saved to {csv_filename} and {json_filename}")
     return results_snr
 
 def run_experiment_1_mono_sim(A_target, dm_task, clf, L_in, mu_in, L_out, mu_out, device):
@@ -649,7 +686,7 @@ def run_sim_configuration_disjoint(
     return results, loss_history_tx, loss_history_rx
 
 
-def run_experiment_layers_disjoint(A_target, H_mimo, dm_task, clf, L_in, mu_in, L_out, mu_out, device, strategy_name="Linear"):
+def run_experiment_layers_disjoint(A_target, H_mimo, dm_task, clf, L_in, mu_in, L_out, mu_out, device, strategy_name="Linear", seed=42):
     """
     EXPERIMENT 1 (DISJOINT): Accuracy vs Number of SIM Layers (L).
     Salvataggio differenziato per strategia (Linear/PPFE) e approccio (Disjoint).
@@ -690,7 +727,7 @@ def run_experiment_layers_disjoint(A_target, H_mimo, dm_task, clf, L_in, mu_in, 
     return results_layers
 
 
-def run_experiment_snr_disjoint(A_target, H_mimo, dm_task, clf, L_in, mu_in, L_out, mu_out, device, strategy_name="Linear"):
+def run_experiment_snr_disjoint(A_target, H_mimo, dm_task, clf, L_in, mu_in, L_out, mu_out, device, strategy_name="Linear",seed=42):
     """
     EXPERIMENT 2 (DISJOINT): Accuracy vs Signal-to-Noise Ratio (SNR).
     Salvataggio differenziato per strategia (Linear/PPFE) e approccio (Disjoint).
