@@ -13,8 +13,7 @@ def run_oracle_test(dm_task, A_target, L_in, mu_in, L_out, mu_out, clf, device):
     """
     print("\n🔍 --- AVVIO ORACLE CHECK (Pure Software) ---")
     clf.eval()
-    all_preds, all_labels = [], []
-    
+    all_preds, all_labels = [], [] 
     # Usiamo il test_dataloader del task (ViT-Small)
     dataloader = dm_task.test_dataloader()
     

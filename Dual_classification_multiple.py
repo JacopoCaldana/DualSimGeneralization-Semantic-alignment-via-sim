@@ -130,12 +130,12 @@ for current_seed in SEED_LIST:
     # ============================================================
     
     # --- EXPERIMENT 1: Impact of Meta-surface Layers (L) ---
-    print(f"🚀 Starting Experiment 1: Layers Variation ({ALIGNMENT_TYPE})...")
-    data_layers = run_experiment_layers(
-          A_target=A_target, H_mimo=H_mimo, dm_task=dm_task, clf=clf, 
-          L_in=L_in, mu_in=mu_in, L_out=L_out, mu_out=mu_out, device=device,
-          strategy_name=ALIGNMENT_TYPE, seed=current_seed
-    )
+   # print(f"🚀 Starting Experiment 1: Layers Variation ({ALIGNMENT_TYPE})...")
+    #data_layers = run_experiment_layers(
+     #     A_target=A_target, H_mimo=H_mimo, dm_task=dm_task, clf=clf, 
+      #    L_in=L_in, mu_in=mu_in, L_out=L_out, mu_out=mu_out, device=device,
+       #   strategy_name=ALIGNMENT_TYPE, seed=current_seed
+    #)
 
     # --- EXPERIMENT 2: Impact of Signal-to-Noise Ratio (SNR) ---
     # print(f"\n 🚀 Starting Experiment 2: SNR Sweep ({ALIGNMENT_TYPE})...")
@@ -174,12 +174,12 @@ for current_seed in SEED_LIST:
     # ============================================================
 
     # --- EXPERIMENT 1 (DISJOINT): Impact of Meta-surface Layers (L) ---
-    # print(f"🚀 Starting Disjoint Experiment 1: Layers Variation ({ALIGNMENT_TYPE})...")
-    # data_layers_disjoint = run_experiment_layers_disjoint(
-    #     A_target=A_target, H_mimo=H_mimo, dm_task=dm_task, clf=clf, 
-    #     L_in=L_in, mu_in=mu_in, L_out=L_out, mu_out=mu_out, device=device,
-    #     strategy_name=ALIGNMENT_TYPE, seed=current_seed
-    # )
+    print(f"🚀 Starting Disjoint Experiment 1: Layers Variation ({ALIGNMENT_TYPE})...")
+    data_layers_disjoint = run_experiment_layers_disjoint(
+         A_target=A_target, H_mimo=H_mimo, dm_task=dm_task, clf=clf, 
+         L_in=L_in, mu_in=mu_in, L_out=L_out, mu_out=mu_out, device=device,
+         strategy_name=ALIGNMENT_TYPE, seed=current_seed
+    )
 
     # --- EXPERIMENT 2 (DISJOINT): Impact of Signal-to-Noise Ratio (SNR) ---
     # print(f"\n🚀 Starting Disjoint Experiment 2: SNR Sweep ({ALIGNMENT_TYPE})...")

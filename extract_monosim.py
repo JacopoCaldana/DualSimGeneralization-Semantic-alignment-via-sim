@@ -3,103 +3,78 @@ import json
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent
+SEEDS = [27, 42, 123]
+STRATEGIES = ['PPFE', 'Linear']
 
-def extract_monosim_specific_configs(csv_path="final_results_monosim.csv"):
-    # Carichiamo il CSV
-    df = pd.read_csv(csv_path)
-    
-    # --- APPLICAZIONE DEI FILTRI RICHIESTI ---
-    # 1. Solo Seed = 42
-    df = df[df['Seed'] == 42]
-    
-    # 2. Solo Meta-Atomi 16 e 32
-    valid_atoms = [16, 32]
-    df = df[df['SIM Meta Atoms Intermediate X'].isin(valid_atoms)]
-    
-    # 3. Solo Layer specifici
-    valid_layers = [2, 5, 10, 15, 20, 25]
-    df = df[df['SIM Layers'].isin(valid_layers)]
-    # -----------------------------------------
-    
-    for strategy in ['PPFE', 'Linear']:
-        # Filtriamo per la strategia corrente
-        df_strat = df[df['Alignment Type'] == strategy]
-        
-        # Estraiamo i dati. Dato che il seed è fisso a 42, ogni riga dovrebbe essere unica,
-        # ma usiamo groupby.mean() per garantire che non ci siano duplicati imprevisti nel CSV
-        agg_df = df_strat.groupby(['SIM Meta Atoms Intermediate X', 'SIM Layers'])['Accuracy SIM Mimo'].mean().reset_index()
-        
-        results_layers = {}
-        
-        for M in valid_atoms:
-            chiave_atomi = f"{int(M)}x{int(M)}"
-            results_layers[chiave_atomi] = {}
-            
-            # Filtriamo i dati per i meta-atomi correnti
-            df_M = agg_df[agg_df['SIM Meta Atoms Intermediate X'] == M]
-            
-            for index, row in df_M.iterrows():
-                layer_val = str(int(row['SIM Layers']))
-                acc_val = row['Accuracy SIM Mimo'] * 100 # Convertiamo in percentuale
-                results_layers[chiave_atomi][layer_val] = acc_val
-                
-        # Salvataggio nel file JSON
-        out_file = BASE_DIR / f"results_layers_monosim_{strategy}.json"
-        with open(out_file, "w") as f:
-            json.dump(results_layers, f, indent=4)
-            
-        print(f"✅ Estrazione completata: {out_file.name} (Seed 42, {valid_atoms}, L={valid_layers})")
+def extract_layers_monosim_all_seeds(csv_path_pattern="final_results_{strategy}.csv"):
+    """Estrae i dati Accuracy vs Layers con tag 'monosim' nel nome del file."""
+    for strategy in STRATEGIES:
+        # Adattiamo il percorso in base a come sono nominati i tuoi CSV
+        csv_path = csv_path_pattern.format(strategy=strategy)
+        if not Path(csv_path).exists():
+            print(f"⚠️ Salto: {csv_path} non trovato.")
+            continue
 
-# Lancia la funzione
-extract_monosim_specific_configs()
+        df_all = pd.read_csv(csv_path)
+        valid_atoms = [16, 32,64]
 
+        for seed in SEEDS:
+            df = df_all[(df_all['Seed'] == seed) & (df_all['Alignment Type'] == strategy)]
+            if df.empty: continue
 
-def extract_monosim_snr_configs(csv_path="final_results_snr.csv"):
-    # Carichiamo il CSV
-    df = pd.read_csv(csv_path)
-    
-    # --- APPLICAZIONE DEI FILTRI RICHIESTI ---
-    # 1. Solo Seed = 42
-    df = df[df['Seed'] == 42]
-    
-    # 2. Solo Layer = 10 (l'esperimento SNR è fissato a L=10)
-    df = df[df['SIM Layers'] == 10]
-    
-    # 3. Solo Meta-Atomi 16 e 32
-    valid_atoms = [16, 32]
-    df = df[df['SIM Meta Atoms Intermediate X'].isin(valid_atoms)]
-    # -----------------------------------------
-    
-    for strategy in ['PPFE', 'Linear']:
-        # Filtriamo per la strategia corrente
-        df_strat = df[df['Alignment Type'] == strategy]
-        
-        # Raggruppiamo per Meta-Atomi e livello di SNR
-        agg_df = df_strat.groupby(['SIM Meta Atoms Intermediate X', 'SNR [dB]'])['Accuracy SIM Mimo'].mean().reset_index()
-        
-        results_snr = {}
-        
-        for M in valid_atoms:
-            chiave_atomi = f"{int(M)}x{int(M)}"
-            results_snr[chiave_atomi] = {}
+            agg_df = df.groupby(['SIM Meta Atoms Intermediate X', 'SIM Layers'])['Accuracy SIM Mimo'].mean().reset_index()
             
-            # Filtriamo i dati per i meta-atomi correnti
-            df_M = agg_df[agg_df['SIM Meta Atoms Intermediate X'] == M]
-            
-            # Ordiniamo per SNR (dal rumore peggiore a quello migliore)
-            df_M = df_M.sort_values(by='SNR [dB]')
-            
-            for index, row in df_M.iterrows():
-                snr_val = str(int(row['SNR [dB]']))
-                acc_val = row['Accuracy SIM Mimo'] * 100 # Convertiamo in percentuale (es. 0.85 -> 85.0)
-                results_snr[chiave_atomi][snr_val] = acc_val
-                
-        # Salvataggio nel file JSON
-        out_file = BASE_DIR / f"results_snr_monosim_{strategy}.json"
-        with open(out_file, "w") as f:
-            json.dump(results_snr, f, indent=4)
-            
-        print(f"✅ Estrazione SNR completata: {out_file.name} (Seed 42, {valid_atoms}, L=10)")
+            results_layers = {}
+            for M in valid_atoms:
+                chiave_atomi = f"{int(M)}x{int(M)}"
+                results_layers[chiave_atomi] = {}
+                df_M = agg_df[agg_df['SIM Meta Atoms Intermediate X'] == M]
+                for _, row in df_M.iterrows():
+                    L = str(int(row['SIM Layers']))
+                    acc = row['Accuracy SIM Mimo']
+                    results_layers[chiave_atomi][L] = acc * 100 if acc <= 1.0 else acc
 
-# Lancia la funzione
-extract_monosim_snr_configs()
+            # NOME FILE CON TAG MONOSIM
+            out_file = BASE_DIR / f"results_layers_monosim_{strategy}_seed{seed}.json"
+            with open(out_file, "w") as f:
+                json.dump(results_layers, f, indent=4)
+            print(f"✅ Creato: {out_file.name}")
+
+def extract_snr_monosim_all_seeds(csv_path_pattern="final_results_snr_{strategy}.csv"):
+    """Estrae i dati Accuracy vs SNR con tag 'monosim' nel nome del file."""
+    for strategy in STRATEGIES:
+        csv_path = csv_path_pattern.format(strategy=strategy)
+        if not Path(csv_path).exists():
+            print(f"⚠️ Salto: {csv_path} non trovato.")
+            continue
+
+        df_all = pd.read_csv(csv_path)
+        valid_atoms = [16, 32,64]
+
+        for seed in SEEDS:
+            # L=10 è lo standard per i tuoi test SNR
+            df = df_all[(df_all['Seed'] == seed) & (df_all['Alignment Type'] == strategy) & (df_all['SIM Layers'] == 10)]
+            if df.empty: continue
+
+            agg_df = df.groupby(['SIM Meta Atoms Intermediate X', 'SNR [dB]'])['Accuracy SIM Mimo'].mean().reset_index()
+            
+            results_snr = {}
+            for M in valid_atoms:
+                chiave_atomi = f"{int(M)}x{int(M)}"
+                results_snr[chiave_atomi] = {}
+                df_M = agg_df[agg_df['SIM Meta Atoms Intermediate X'] == M].sort_values(by='SNR [dB]')
+                for _, row in df_M.iterrows():
+                    snr_val = str(row['SNR [dB]'])
+                    acc = row['Accuracy SIM Mimo']
+                    results_snr[chiave_atomi][snr_val] = acc * 100 if acc <= 1.0 else acc
+
+            # NOME FILE CON TAG MONOSIM
+            out_file = BASE_DIR / f"results_snr_monosim_{strategy}_seed{seed}.json"
+            with open(out_file, "w") as f:
+                json.dump(results_snr, f, indent=4)
+            print(f"✅ Creato: {out_file.name}")
+
+if __name__ == "__main__":
+    # Esegui l'estrazione dai tuoi CSV
+    extract_layers_monosim_all_seeds()
+    extract_snr_monosim_all_seeds()

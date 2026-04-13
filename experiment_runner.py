@@ -623,7 +623,7 @@ import torch.optim as optim
 def run_sim_configuration_disjoint(
     L, M_int, A_target, H_mimo, snr_list, 
     dm_task, clf, L_in, mu_in, L_out, mu_out, device, 
-    max_iters=5000, lr=0.1
+    max_iters=5000, lr=0.1,seed=42
 ):
     wavelength = 0.005  
     slayer = 5 * wavelength 
@@ -686,46 +686,84 @@ def run_sim_configuration_disjoint(
     return results, loss_history_tx, loss_history_rx
 
 
+
 def run_experiment_layers_disjoint(A_target, H_mimo, dm_task, clf, L_in, mu_in, L_out, mu_out, device, strategy_name="Linear", seed=42):
-    """
-    EXPERIMENT 1 (DISJOINT): Accuracy vs Number of SIM Layers (L).
-    Salvataggio differenziato per strategia (Linear/PPFE) e approccio (Disjoint).
-    """
+    import os
+    import json
+    import gc
+
     print("\n" + "="*50)
-    print(f"🚀 STARTING DISJOINT EXP 1: ACCURACY vs LAYERS (L) | Strategy: {strategy_name}")
+    print(f"🚀 STARTING DISJOINT EXP 1: ACCURACY vs LAYERS (L) | Strategy: {strategy_name} | Seed: {seed}")
     print("="*50)
     
-    layer_list = [2, 5, 10, 15, 20, 25]
+    layer_list = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 15, 20]
     atoms_list = [16, 32] 
-    snr_eval = [None]  # Testiamo senza rumore per valutare la pura capacità di emulazione
+    snr_eval = [None]
     
-    results_layers = {}
+    # Prepara nomi file con seed
+    csv_filename = f"final_results_disjoint_{strategy_name}.csv"
+    json_filename = f"results_layers_disjoint_{strategy_name}_seed{seed}.json"
+
+    if os.path.exists(json_filename):
+        with open(json_filename, "r") as f:
+            results_layers = json.load(f)
+    else:
+        results_layers = {}
+
+    # Dati base per CSV (stessa struttura del caso Joint)
+    base_run_data = {
+        "Dataset": "CIFAR-10",
+        "Classes": 10,
+        "Seed": seed,
+        "Alignment Type": strategy_name,
+        "Method": "Disjoint",
+        "Iterations": 5000,
+        "Simulation": "DualSIM_Disjoint",
+        "SIM Wavelength": 0.005,
+        "SIM Thickness": 0.025,
+    }
 
     for M_int in atoms_list:
-        results_layers[f"{M_int}x{M_int}"] = {}
+        if f"{M_int}x{M_int}" not in results_layers:
+            results_layers[f"{M_int}x{M_int}"] = {}
+            
         for L in layer_list:
             print(f"\n🔄 Testing Config: {M_int}x{M_int} Meta-atoms | L = {L} Layers")
             
-            # Nota i due '_' per raccogliere entrambe le loss history (TX e RX)
-            acc_dict, _, _ = run_sim_configuration_disjoint(
+            acc_dict, _, loss_rx = run_sim_configuration_disjoint(
                 L=L, M_int=M_int, A_target=A_target, H_mimo=H_mimo, 
                 snr_list=snr_eval, dm_task=dm_task, clf=clf, 
                 L_in=L_in, mu_in=mu_in, L_out=L_out, mu_out=mu_out, 
-                device=device, max_iters=5000, lr=0.01
+                device=device, max_iters=5000, lr=0.1, seed=seed
             )
             
             acc_val = acc_dict["Inf"]
             results_layers[f"{M_int}x{M_int}"][str(L)] = acc_val
+            final_loss = loss_rx[-1] if loss_rx else 0.0
+            
             print(f"✅ Result: Accuracy = {acc_val:.2f}%")
             
-            # --- SALVATAGGIO DINAMICO ---
-            filename = BASE_DIR / f"results_layers_disjoint_{strategy_name}.json"
-            with open(filename, "w") as f:
+            # --- SALVATAGGIO CSV ---
+            current_run_data = base_run_data.copy()
+            current_run_data.update({
+                "SIM Layers": L,
+                "SIM Meta Atoms Intermediate X": M_int,
+                "SIM Meta Atoms Intermediate Y": M_int,
+                "SIM Learning Rate": 0.1,
+                "SIM Training Loss": final_loss,
+                "Accuracy SIM Mimo": acc_val
+            })
+            append_result_to_csv(csv_filename, current_run_data)
+            
+            # --- SALVATAGGIO JSON ---
+            with open(json_filename, "w") as f:
                 json.dump(results_layers, f, indent=4)
-                
-    print(f"\n🎯 EXPERIMENT 1 COMPLETED! Data saved to {filename.name}")
-    return results_layers
 
+            gc.collect()
+            torch.cuda.empty_cache()
+                
+    print(f"\n🎯 EXPERIMENT 1 COMPLETED! Data saved to {csv_filename} and {json_filename}")
+    return results_layers
 
 def run_experiment_snr_disjoint(A_target, H_mimo, dm_task, clf, L_in, mu_in, L_out, mu_out, device, strategy_name="Linear",seed=42):
     """

@@ -2,6 +2,9 @@ import json
 import matplotlib.pyplot as plt
 from pathlib import Path
 from matplotlib.lines import Line2D
+import seaborn as sns
+import numpy as np
+import pandas as pd
 
 
 # Configurazione per rendere i grafici professionali
@@ -715,7 +718,216 @@ def plot_ultimate_snr_comparison():
     print(f"✅ Grafico finale definitivo SNR salvato in: {save_path.name}")
 
 #####################################################################
+############### SEABORN PLOTS  ##################
 #####################################################################    
+
+def plot_ultimate_comparison_layers():
+    """Confronta Linear vs PPFE usando Seaborn per media e varianza (shading)."""
+    plt.rcParams.update({
+        "figure.figsize": (16, 8),
+        "font.size": 22,
+        "axes.titlesize": 24,
+        "axes.labelsize": 24,
+        "xtick.labelsize": 22,
+        "ytick.labelsize": 22,
+        "legend.fontsize": 18,
+        "legend.title_fontsize": 20,
+        "lines.markersize": 14,
+        "lines.linewidth": 3,
+        "text.usetex": False, # Disattivato per evitare l'errore 'latex not found'
+        "mathtext.fontset": "stix",
+        "font.family": "serif",
+        "font.serif": ["Times New Roman", "Times"]
+    })
+
+    seeds = [27, 42, 123]
+    strategies = ["Linear", "PPFE"]
+    configs = ["16x16", "32x32", "64x64"]
+    custom_palette = {"16x16": "#1f77b4", "32x32": "#ff7f0e", "64x64": "#2ca02c"}
+
+    rows = []
+    for strategy in strategies:
+        for seed in seeds:
+            json_path = Path(f"results_layers_{strategy}_seed{seed}.json")
+            if not json_path.exists(): continue
+            with open(json_path, "r") as f:
+                data = json.load(f)
+            for config in configs:
+                if config in data:
+                    for L, acc in data[config].items():
+                        # PORTIAMO TUTTO IN SCALA 0-100
+                        val = acc if acc > 1 else acc * 100
+                        rows.append({
+                            "Layers": int(L),
+                            "Accuracy": val,
+                            "Config": config,
+                            "Strategy": strategy
+                        })
+    
+    df = pd.DataFrame(rows)
+    if df.empty:
+        print("❌ ERRORE: Nessun dato trovato nei file JSON!")
+        return
+
+    # CREAZIONE PLOT
+    sns.set_style("whitegrid", {'grid.linestyle': '--', 'grid.alpha': 0.5})
+    fig, ax = plt.subplots()
+
+    # Plot principale
+    sns.lineplot(
+        data=df, x="Layers", y="Accuracy", hue="Config", style="Strategy",
+        palette=custom_palette, markers={'Linear': 'o', 'PPFE': 'X'},
+        dashes={'Linear': '', 'PPFE': (6, 3)}, errorbar='sd', ax=ax
+    )
+
+    # BASELINES (ORACLE) - Anche queste in scala 100
+    try:
+        with open("all_seeds_baselines.json", "r") as f:
+            oracles = json.load(f)
+            avg_lin = np.mean([oracles[str(s)]['Linear'] for s in seeds])
+            avg_ppfe = np.mean([oracles[str(s)]['PPFE'] for s in seeds])
+            # Se gli oracle sono 0.95, moltiplichiamo per 100
+            if avg_lin < 1: avg_lin *= 100
+            if avg_ppfe < 1: avg_ppfe *= 100
+            
+            ax.axhline(y=avg_lin, color='gray', ls='-.', lw=1.5, label='Original Linear', alpha=0.6)
+            ax.axhline(y=avg_ppfe, color='gray', ls=':', lw=1.5, label='Original PPFE', alpha=0.6)
+    except: pass
+
+    # ESTETICA FINALE
+    ax.set_title('Dual-SIM Scalability: Accuracy vs. Number of Layers ($L$)', pad=25, weight='bold')
+    ax.set_xlabel('Number of SIM Layers $L$')
+    ax.set_ylabel(' Accuracy (%)')
+    
+    # Limiti coerenti con il tuo screenshot
+    ax.set_ylim(0, 100) 
+    ax.set_xlim(1, 20)
+    ax.set_xticks([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 15, 20])
+
+    # Spostiamo la legenda fuori a destra per non coprire i dati
+    ax.legend(bbox_to_anchor=(1.02, 1), loc='upper left', borderaxespad=0.)
+
+    plt.tight_layout()
+    plt.savefig("plot_ultimate_comparison_layers_v2.png", dpi=300, bbox_inches='tight')
+    plt.show()
+    print("✅ Grafico salvato correttamente: plot_ultimate_comparison_layers_v2.png")
+
+
+
+
+def plot_ultimate_architecture_comparison_ppfe():
+    # --- 1. CONFIGURAZIONE ESTETICA (Times New Roman / Scientific) ---
+    plt.rcParams.update({
+        "figure.figsize": (16, 9),
+        "font.size": 22,
+        "axes.titlesize": 24,
+        "axes.labelsize": 24,
+        "xtick.labelsize": 22,
+        "ytick.labelsize": 22,
+        "legend.fontsize": 18,
+        "legend.title_fontsize": 20,
+        "lines.markersize": 14,
+        "lines.linewidth": 3,
+        "text.usetex": False, 
+        "mathtext.fontset": "stix",
+        "font.family": "serif",
+        "font.serif": ["Times New Roman", "Times"]
+    })
+
+    seeds = [27, 42, 123]
+    configs = ["16x16", "32x32"] # Ci focalizziamo su questi due come da tua richiesta
+    
+    # Mapping Architetture -> Prefisso File -> Colore
+    arch_map = {
+        "Joint": {"prefix": "results_layers_PPFE", "color": "#1f77b4"},      # Blu
+        "Disjoint": {"prefix": "results_layers_disjoint_PPFE", "color": "#ff7f0e"}, # Arancio
+        "Mono-SIM": {"prefix": "results_layers_monosim_PPFE", "color": "#2ca02c"}   # Verde
+    }
+
+    rows = []
+
+    # --- 2. CARICAMENTO E AGGREGAZIONE DATI ---
+    for arch_name, info in arch_map.items():
+        for seed in seeds:
+            file_path = Path(f"{info['prefix']}_seed{seed}.json")
+            
+            if not file_path.exists():
+                print(f"⚠️ File mancante: {file_path.name}")
+                continue
+                
+            with open(file_path, "r") as f:
+                data = json.load(f)
+            
+            for config in configs:
+                if config in data:
+                    for L, acc in data[config].items():
+                        # Normalizzazione 0-100
+                        val = acc if acc > 1 else acc * 100
+                        rows.append({
+                            "Layers": int(L),
+                            "Accuracy": val,
+                            "Architecture": arch_name,
+                            "Meta-Atoms": config
+                        })
+
+    df = pd.DataFrame(rows)
+    if df.empty:
+        print("❌ Nessun dato trovato! Controlla i nomi dei file .json")
+        return
+
+    # --- 3. CREAZIONE PLOT CON SEABORN ---
+    sns.set_style("whitegrid", {'grid.linestyle': '--', 'grid.alpha': 0.5})
+    fig, ax = plt.subplots()
+
+    # hue="Architecture" -> Cambia Colore
+    # style="Meta-Atoms" -> Cambia Marker e Linea
+    plot = sns.lineplot(
+        data=df, 
+        x="Layers", y="Accuracy", 
+        hue="Architecture", 
+        style="Meta-Atoms",
+        palette={k: v['color'] for k, v in arch_map.items()},
+        markers={'16x16': 'o', '32x32': '^'},
+        dashes={'16x16': (None, None), '32x32': (4, 3)}, # Continua per 16, tratteggiata per 32
+        errorbar='sd', # Sfumatura della deviazione standard
+        ax=ax
+    )
+
+    # --- 4. AGGIUNTA ORACLE (Baseline PPFE media) ---
+    #try:
+     #   with open("all_seeds_baselines.json", "r") as f:
+      #      oracles = json.load(f)
+       #     avg_ppfe = np.mean([oracles[str(s)]['PPFE'] for s in seeds])
+        #    if avg_ppfe < 1: avg_ppfe *= 100
+         #   ax.axhline(y=avg_ppfe, color='gray', ls=':', lw=2, alpha=0.8, label='Baseline PPFE (Ideal)')
+    #except: pass
+
+    # --- 5. REFINEMENT ASSI E TITOLI ---
+    ax.set_title('Architecture Comparison}', pad=25)
+    ax.set_xlabel('Number of SIM Layers $L$')
+    ax.set_ylabel(' Accuracy (%)')
+    
+    # Range richiesto: 0-100
+    ax.set_ylim(0, 105) 
+    ax.set_xlim(1, 20)
+    
+    # Ticks specifici richiesti
+    ax.set_xticks([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 15, 20])
+
+    # Legenda esterna per pulizia
+    ax.legend(bbox_to_anchor=(1.02, 1), loc='upper left', borderaxespad=0.)
+
+    plt.tight_layout()
+    
+    # Salvataggio
+    save_path = "plot_architecture_comparison_PPFE.png"
+    plt.savefig(save_path, dpi=300, bbox_inches='tight')
+    plt.show()
+    print(f"✅ Grafico finale salvato in: {save_path}")
+
+
+#######################################
+######################################    
 
 if __name__ == "__main__":
     # Puoi inserire qui il valore dell'Oracle che ti ha stampato il terminale
@@ -734,7 +946,8 @@ if __name__ == "__main__":
     plot_depth_lr_comparison()
     plot_ultimate_layers_comparison()
     plot_ultimate_snr_comparison()
-
+    plot_ultimate_comparison_layers()
+    plot_ultimate_architecture_comparison_ppfe()
 
 
 
