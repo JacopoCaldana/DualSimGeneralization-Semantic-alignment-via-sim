@@ -742,8 +742,8 @@ def plot_ultimate_comparison_layers():
 
     seeds = [27, 42, 123]
     strategies = ["Linear", "PPFE"]
-    configs = ["16x16", "32x32", "64x64"]
-    custom_palette = {"16x16": "#1f77b4", "32x32": "#ff7f0e", "64x64": "#2ca02c"}
+    configs = ["32x32", "64x64"]
+    custom_palette = { "32x32": "#ff7f0e", "64x64": "#2ca02c"}
 
     rows = []
     for strategy in strategies:
@@ -808,9 +808,9 @@ def plot_ultimate_comparison_layers():
     ax.legend(bbox_to_anchor=(1.02, 1), loc='upper left', borderaxespad=0.)
 
     plt.tight_layout()
-    plt.savefig("plot_ultimate_comparison_layers_v2.png", dpi=300, bbox_inches='tight')
+    plt.savefig("plot_ultimate_comparison_layers_v2.pdf", dpi=300, bbox_inches='tight')
     plt.show()
-    print("✅ Grafico salvato correttamente: plot_ultimate_comparison_layers_v2.png")
+    print("✅ Grafico salvato correttamente: plot_ultimate_comparison_layers_v2.pdf")
 
 
 
@@ -835,7 +835,7 @@ def plot_ultimate_architecture_comparison_ppfe():
     })
 
     seeds = [27, 42, 123]
-    configs = ["16x16", "32x32"] # Ci focalizziamo su questi due come da tua richiesta
+    configs = [ "32x32"] # Ci focalizziamo su questi due come da tua richiesta
     
     # Mapping Architetture -> Prefisso File -> Colore
     arch_map = {
@@ -887,8 +887,8 @@ def plot_ultimate_architecture_comparison_ppfe():
         hue="Architecture", 
         style="Meta-Atoms",
         palette={k: v['color'] for k, v in arch_map.items()},
-        markers={'16x16': 'o', '32x32': '^'},
-        dashes={'16x16': (None, None), '32x32': (4, 3)}, # Continua per 16, tratteggiata per 32
+        markers={ '32x32': '^'},
+        dashes={'32x32': (None, None)}, # Continua per 16, tratteggiata per 32
         errorbar='sd', # Sfumatura della deviazione standard
         ax=ax
     )
@@ -903,7 +903,7 @@ def plot_ultimate_architecture_comparison_ppfe():
     #except: pass
 
     # --- 5. REFINEMENT ASSI E TITOLI ---
-    ax.set_title('Architecture Comparison}', pad=25)
+    ax.set_title('Architecture Comparison', pad=25)
     ax.set_xlabel('Number of SIM Layers $L$')
     ax.set_ylabel(' Accuracy (%)')
     
@@ -920,7 +920,7 @@ def plot_ultimate_architecture_comparison_ppfe():
     plt.tight_layout()
     
     # Salvataggio
-    save_path = "plot_architecture_comparison_PPFE.png"
+    save_path = "plot_architecture_comparison_PPFE.pdf"
     plt.savefig(save_path, dpi=300, bbox_inches='tight')
     plt.show()
     print(f"✅ Grafico finale salvato in: {save_path}")

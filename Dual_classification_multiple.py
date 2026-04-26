@@ -19,7 +19,7 @@ from oracle_test import run_oracle_test
 
 # --- Experiment Execution Functions ---
 from experiment_runner import run_experiment_layers, run_experiment_snr, run_experiment_1_mono_sim, run_sim_configuration_asymmetric,run_experiment_rx_depth,run_experiment_tx_depth, run_experiment_layers_disjoint
-from experiment_runner import run_experiment_layers_disjoint,run_experiment_snr_disjoint
+from experiment_runner import run_experiment_layers_disjoint,run_experiment_snr_disjoint, run_grid_search_lambda
 
 
 
@@ -138,12 +138,12 @@ for current_seed in SEED_LIST:
     #)
 
     # --- EXPERIMENT 2: Impact of Signal-to-Noise Ratio (SNR) ---
-    # print(f"\n 🚀 Starting Experiment 2: SNR Sweep ({ALIGNMENT_TYPE})...")
-    # data_snr = run_experiment_snr(
-    #     A_target=A_target, H_mimo=H_mimo, dm_task=dm_task, clf=clf, 
-    #     L_in=L_in, mu_in=mu_in, L_out=L_out, mu_out=mu_out, device=device,
-    #     strategy_name=ALIGNMENT_TYPE, seed=current_seed
-    # )
+    #print(f"\n 🚀 Starting Experiment 2: SNR Sweep ({ALIGNMENT_TYPE})...")
+    #data_snr = run_experiment_snr(
+     #    A_target=A_target, H_mimo=H_mimo, dm_task=dm_task, clf=clf, 
+      #   L_in=L_in, mu_in=mu_in, L_out=L_out, mu_out=mu_out, device=device,
+       #  strategy_name=ALIGNMENT_TYPE, seed=current_seed
+    #)
 
     # --- MONO-SIM ABLATION STUDY ---
     # print(f"\n 🚀 Starting Mono-SIM Ablation Study ({ALIGNMENT_TYPE})...")
@@ -174,12 +174,12 @@ for current_seed in SEED_LIST:
     # ============================================================
 
     # --- EXPERIMENT 1 (DISJOINT): Impact of Meta-surface Layers (L) ---
-    print(f"🚀 Starting Disjoint Experiment 1: Layers Variation ({ALIGNMENT_TYPE})...")
-    data_layers_disjoint = run_experiment_layers_disjoint(
-         A_target=A_target, H_mimo=H_mimo, dm_task=dm_task, clf=clf, 
-         L_in=L_in, mu_in=mu_in, L_out=L_out, mu_out=mu_out, device=device,
-         strategy_name=ALIGNMENT_TYPE, seed=current_seed
-    )
+    #print(f"🚀 Starting Disjoint Experiment 1: Layers Variation ({ALIGNMENT_TYPE})...")
+    #data_layers_disjoint = run_experiment_layers_disjoint(
+    #     A_target=A_target, H_mimo=H_mimo, dm_task=dm_task, clf=clf, 
+     #    L_in=L_in, mu_in=mu_in, L_out=L_out, mu_out=mu_out, device=device,
+      #   strategy_name=ALIGNMENT_TYPE, seed=current_seed
+    #)
 
     # --- EXPERIMENT 2 (DISJOINT): Impact of Signal-to-Noise Ratio (SNR) ---
     # print(f"\n🚀 Starting Disjoint Experiment 2: SNR Sweep ({ALIGNMENT_TYPE})...")
@@ -200,3 +200,23 @@ for current_seed in SEED_LIST:
     #     strategy_name=ALIGNMENT_TYPE, seed=current_seed
     # )
     # print(f"\n ✅ Grid Search Completed. Results saved to: grid_search_L_vs_LR_{ALIGNMENT_TYPE}_seed{current_seed}.json")
+    
+
+
+
+    # ============================================================
+    #  HYPERPARAMETER TUNING: ADAPTIVE NOISE REGULARIZATION
+    # ============================================================
+
+    # --- GRID SEARCH: Identify Optimal lambda_base (Targeting Low SNR Regimes) ---
+    print(f"\n🔍 Starting Grid Search for Noise Regularization (lambda_base)...")
+    best_l_base, gs_results = run_grid_search_lambda(
+         A_target=A_target, H_mimo=H_mimo, dm_task=dm_task, clf=clf, 
+         L_in=L_in, mu_in=mu_in, L_out=L_out, mu_out=mu_out, device=device,
+         lambda_candidates=[1e-3,1e-2,1e-1,1], # Logarithmic scale sweep
+         strategy_name=ALIGNMENT_TYPE, seed=current_seed
+    )
+    print(f"✅ Grid Search Completed. Optimal lambda_base identified: {best_l_base}")
+
+
+   

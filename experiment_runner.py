@@ -104,77 +104,94 @@ def plot_and_save_loss(loss_history, filename="loss_plot.png", title="Convergenc
 def run_sim_configuration(
     L, M_int, A_target, H_mimo, snr_list, 
     dm_task, clf, L_in, mu_in, L_out, mu_out, device, 
-    max_iters=3000, lr=0.1, seed=42  # <--- DEFAULT SICURO
+    max_iters=3000, lr=0.1, seed=42,
+    lambda_base=1e-3,          #  Cambiato default per allinearsi all'optimizer
+    adaptive_training=False  
 ):
     """
-    Trains and evaluates a specific Dual-SIM physical configuration.
-    Returns a dictionary containing accuracy results for each requested SNR.
+    Versione aggiornata: supporta sia il training statico (default) 
+    che quello adattivo per SNR.
     """
-    # 0. RESET FISICO DEI SEED (Vitale per il multi-run)
-    torch.manual_seed(seed)
-    np.random.seed(seed)
-    random.seed(seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(seed)
-
-    wavelength = 0.005  # 5mm (60 GHz)
+    wavelength = 0.005  
     slayer = 5 * wavelength 
     dx = wavelength / 2  
 
-    # 1. Physical Initialization (NumPy-based)
+    # 1. Inizializzazione fisica
     sim_cpu = DualSIMoptimizer(
         num_layers_TX=L, 
         num_meta_atoms_TX_in_x=16, num_meta_atoms_TX_in_y=12,
         num_meta_atoms_TX_out_x=24, num_meta_atoms_TX_out_y=16,
         num_meta_atoms_TX_int_x=M_int, num_meta_atoms_TX_int_y=M_int,  
         thickness_TX=slayer * L,
-        
         num_layers_RX=L,
         num_meta_atoms_RX_in_x=24, num_meta_atoms_RX_in_y=16,
         num_meta_atoms_RX_out_x=24, num_meta_atoms_RX_out_y=16,
         num_meta_atoms_RX_int_x=M_int, num_meta_atoms_RX_int_y=M_int,
         thickness_RX=slayer * L,
-        
         wavelength=wavelength,
         spacings={'tx_in': dx, 'tx_out': dx, 'tx_int': dx, 'rx_in': dx, 'rx_out': dx, 'rx_int': dx},
         verbose=False 
     )
 
-    # Convert to PyTorch Model
-    model = DualSIMoptimizerTorch(sim_cpu).to(device)
-
-    # 2. Ottimizzazione (Variabili Collegate!)
-    loss_history = model.optimize_alternating(
-        A_target=A_target,
-        H_mimo=H_mimo,
-        max_iters=max_iters,
-        lr=lr,               # <--- Dinamico
-    )
-
-    # --- CHECK CONVERGENCE ---
-    plot_filename = BASE_DIR / f"loss_plot_seed{seed}_L{L}_M{M_int}.png"
-    plot_title = f"Seed {seed} | L={L}, Atoms={M_int}x{M_int} (iters={max_iters}, lr={lr:.4f})"
-    plot_and_save_loss(loss_history, filename=plot_filename, title=plot_title)
-    # ----------------------------------------
-
-    # 3. Calculate Final Optimal Scaling Factor (Beta) for Inference
-    with torch.no_grad():
-        Z_final, _ = model.get_effective_cascade(H_mimo)
-        beta_opt = torch.sum(torch.conj(Z_final) * A_target) / (torch.sum(torch.conj(Z_final) * Z_final) + 1e-12)
-
-    # 4. Evaluation across all SNR levels 
     results = {}
-    for snr in snr_list:
-        acc = run_evaluation(
-            model=model, dataloader=dm_task.test_dataloader(), 
-            H_mimo=H_mimo, snr_db=snr, beta_opt=beta_opt, 
-            L_in=L_in, mu_in=mu_in, L_out=L_out, mu_out=mu_out, 
-            clf=clf, device=device
-        )
-        snr_key = "Inf" if snr is None else str(snr)
-        results[snr_key] = acc * 100
+    last_loss_history = []
+    
+    #  Assicuriamoci che A_target sia sul device corretto per il calcolo di beta
+    A_torch = torch.as_tensor(A_target, dtype=torch.complex64).to(device)
 
-    return results, loss_history
+    # --- CASO A: TRAINING STATICO ---
+    if not adaptive_training:
+        torch.manual_seed(seed)
+        np.random.seed(seed)
+        random.seed(seed)
+        model = DualSIMoptimizerTorch(sim_cpu).to(device)
+
+        last_loss_history = model.optimize_alternating(
+            A_target=A_target, H_mimo=H_mimo, max_iters=max_iters, 
+            lr=lr, lambda_base=lambda_base, snr_db=None
+        )
+
+        with torch.no_grad():
+            Z_f, _ = model.get_effective_cascade(torch.as_tensor(H_mimo, dtype=torch.complex64).to(device))
+            #  Uso A_torch che si trova sicuramente sul device corretto
+            beta_opt = torch.sum(torch.conj(Z_f) * A_torch) / (torch.sum(torch.conj(Z_f) * Z_f) + 1e-12)
+
+        for snr in snr_list:
+            acc = run_evaluation(
+                model=model, dataloader=dm_task.test_dataloader(), 
+                H_mimo=H_mimo, snr_db=snr, beta_opt=beta_opt, 
+                L_in=L_in, mu_in=mu_in, L_out=L_out, mu_out=mu_out, 
+                clf=clf, device=device
+            )
+            results[str(snr) if snr is not None else "Inf"] = acc * 100
+
+    # --- CASO B: TRAINING ADATTIVO ---
+    else:
+        for snr in snr_list:
+            torch.manual_seed(seed)
+            np.random.seed(seed)
+            random.seed(seed)
+            model = DualSIMoptimizerTorch(sim_cpu).to(device)
+
+            last_loss_history = model.optimize_alternating(
+                A_target=A_target, H_mimo=H_mimo, max_iters=max_iters, 
+                lr=lr, lambda_base=lambda_base, snr_db=snr
+            )
+
+            with torch.no_grad():
+                Z_f, _ = model.get_effective_cascade(torch.as_tensor(H_mimo, dtype=torch.complex64).to(device))
+                #  Uso A_torch che si trova sicuramente sul device corretto
+                beta_opt = torch.sum(torch.conj(Z_f) * A_torch) / (torch.sum(torch.conj(Z_f) * Z_f) + 1e-12)
+
+            acc = run_evaluation(
+                model=model, dataloader=dm_task.test_dataloader(), 
+                H_mimo=H_mimo, snr_db=snr, beta_opt=beta_opt, 
+                L_in=L_in, mu_in=mu_in, L_out=L_out, mu_out=mu_out, 
+                clf=clf, device=device
+            )
+            results[str(snr) if snr is not None else "Inf"] = acc * 100
+
+    return results, last_loss_history
 
 
 def run_experiment_layers(A_target, H_mimo, dm_task, clf, L_in, mu_in, L_out, mu_out, device, strategy_name="Linear", seed=42):
@@ -276,12 +293,11 @@ def run_experiment_snr(A_target, H_mimo, dm_task, clf, L_in, mu_in, L_out, mu_ou
     print("="*50)
     
     L_fixed = 10
-    atoms_list = [16, 32]
+    atoms_list = [32, 64]
     snr_list = [-30, -20, -10, 0, 10, 20, 30]
     
     max_iters_run = 3000
-    base_lr = 0.3
-    actual_lr = base_lr / (L_fixed ** 1.3)
+    base_lr = 0.1
     
     wavelength = 0.005
     slayer = 5 * wavelength
@@ -304,7 +320,7 @@ def run_experiment_snr(A_target, H_mimo, dm_task, clf, L_in, mu_in, L_out, mu_ou
         "Iterations": max_iters_run,
         "Simulation": "DualSIM_Superfast_L1.3_SNR",
         "SIM Layers": L_fixed,
-        "SIM Learning Rate": actual_lr,
+        "SIM Learning Rate": base_lr,
         "SIM Wavelength": wavelength,
         "SIM Thickness": slayer,
         "SIM Meta Atoms Spacing Intermediate X": dx,
@@ -320,7 +336,8 @@ def run_experiment_snr(A_target, H_mimo, dm_task, clf, L_in, mu_in, L_out, mu_ou
             snr_list=snr_list, dm_task=dm_task, clf=clf, 
             L_in=L_in, mu_in=mu_in, L_out=L_out, mu_out=mu_out, 
             device=device, max_iters=max_iters_run,
-            lr=actual_lr, seed=seed
+            lr=base_lr, seed=seed,
+            adaptive_training=True # <--- QUESTO DEVE ESSERE TRUE
         )
         
         final_loss = loss_history[-1] if loss_history else 0.0
@@ -623,67 +640,73 @@ import torch.optim as optim
 def run_sim_configuration_disjoint(
     L, M_int, A_target, H_mimo, snr_list, 
     dm_task, clf, L_in, mu_in, L_out, mu_out, device, 
-    max_iters=5000, lr=0.1,seed=42
+    max_iters=5000, lr=0.1, seed=42,
+    adaptive_training=False # MODIFICA 1: Flag per attivare l'MMSE specifico per SNR
 ):
     wavelength = 0.005  
     slayer = 5 * wavelength 
     dx = wavelength / 2 
 
-    tx_sim_cpu = MonoSIMoptimizer(
-        num_layers=L, num_meta_atoms_in_x=16, num_meta_atoms_in_y=12,
-        num_meta_atoms_out_x=24, num_meta_atoms_out_y=16, 
-        num_meta_atoms_int_x=M_int, num_meta_atoms_int_y=M_int,  
-        thickness=slayer * L, wavelength=wavelength, spacings={'in': dx, 'out': dx, 'int': dx}, verbose=False 
-    )
-
-    rx_sim_cpu = MonoSIMoptimizer(
-        num_layers=L, num_meta_atoms_in_x=24, num_meta_atoms_in_y=16,   
-        num_meta_atoms_out_x=24, num_meta_atoms_out_y=16, 
-        num_meta_atoms_int_x=M_int, num_meta_atoms_int_y=M_int,
-        thickness=slayer * L, wavelength=wavelength, spacings={'in': dx, 'out': dx, 'int': dx}, verbose=False 
-    )
+    # Inizializzazione fisica
+    tx_sim_cpu = MonoSIMoptimizer(...)
+    rx_sim_cpu = MonoSIMoptimizer(...)
 
     tx_model = MonoSIMoptimizerTorch(tx_sim_cpu).to(device)
-    rx_model = MonoSIMoptimizerTorch(rx_sim_cpu).to(device)
-
-    # --- 1. OTTIMIZZAZIONE TX ---
+    
+    # --- 1. OTTIMIZZAZIONE TX (Sempre fuori dal loop, è noise-blind) ---
     print("   -> Optimizing TX-SIM (Semantic Target)...")
     loss_history_tx, _ = tx_model.optimize_sim(target_matrix=A_target, max_iters=max_iters, lr=lr)
 
-    # --- 2. OTTIMIZZAZIONE RX (SEQUENZIALE) ---
-    print("   -> Optimizing RX-SIM (Sequential Recovery)...")
-    # Il TX viene congelato e propaga il segnale nel canale
     with torch.no_grad():
-        G_T_opt = tx_model.get_cascade().cpu().numpy()
-        H_eff = H_mimo.cpu().numpy() @ G_T_opt
+        G_T_opt = tx_model.get_cascade()
+        H_eff = H_mimo @ G_T_opt
 
-    # La RX-SIM viene addestrata per recuperare 'A' guardando il canale distorto
-    loss_history_rx, _ = rx_model.optimize_rx_sequential(
-        H_eff=H_eff, A_target=A_target, max_iters=max_iters, lr=lr, lambda_reg=1e-4
-    )
-
-    # --- 3. RICALIBRAZIONE GLOBALE DEL BETA ---
-    with torch.no_grad():
-        G_R_opt = rx_model.get_cascade().cpu().numpy()
-        Z_final = G_R_opt @ H_mimo.cpu().numpy() @ G_T_opt
-        
-        Z_torch = torch.tensor(Z_final, dtype=torch.complex64, device=device).clone().detach()
-        A_torch = torch.tensor(A_target, dtype=torch.complex64, device=device).clone().detach()
-        beta_global = torch.sum(torch.conj(Z_torch) * A_torch) / (torch.sum(torch.conj(Z_torch) * Z_torch) + 1e-12)
-
-    # --- 4. EVALUATION ---
     results = {}
-    for snr in snr_list:
-        acc = run_evaluation_disjoint_fixed(
-            tx_model=tx_model, rx_model=rx_model, dataloader=dm_task.test_dataloader(), 
-            H_mimo=H_mimo, snr_db=snr, beta_global=beta_global, 
-            L_in=L_in, mu_in=mu_in, L_out=L_out, mu_out=mu_out, 
-            clf=clf, device=device
-        )
-        snr_key = "Inf" if snr is None else str(snr)
-        results[snr_key] = acc * 100
+    loss_history_rx_final = []
 
-    return results, loss_history_tx, loss_history_rx
+    # --- LOGICA DI TRAINING ---
+
+    if adaptive_training:
+        # --- MODIFICA 2: CICLO ADATTIVO (Una RX-SIM ottimizzata per ogni SNR) ---
+        for snr in snr_list:
+            print(f"   -> [Adaptive] Optimizing RX-SIM for SNR: {snr} dB...")
+            # Reset RX-SIM per ogni SNR per garantire la massima specificità
+            rx_model = MonoSIMoptimizerTorch(rx_sim_cpu).to(device)
+            
+            # Chiamata alla nuova funzione MMSE (usiamo snr_db invece di lambda_reg)
+            loss_history_rx, beta_snr = rx_model.optimize_rx_sequential(
+                H_eff=H_eff, A_target=A_target, max_iters=max_iters, lr=lr, snr_db=snr
+            )
+            
+            # Valutazione immediata per questo SNR
+            acc = run_evaluation_disjoint_fixed(
+                tx_model=tx_model, rx_model=rx_model, dataloader=dm_task.test_dataloader(), 
+                H_mimo=H_mimo, snr_db=snr, beta_global=beta_snr, 
+                L_in=L_in, mu_in=mu_in, L_out=L_out, mu_out=mu_out, 
+                clf=clf, device=device
+            )
+            results[str(snr) if snr is not None else "Inf"] = acc * 100
+            loss_history_rx_final = loss_history_rx # Salviamo l'ultima per il log
+            
+    else:
+        # --- COMPORTAMENTO STANDARD (Training RX unico, non adattivo) ---
+        print("   -> [Static] Optimizing RX-SIM (Sequential Recovery)...")
+        rx_model = MonoSIMoptimizerTorch(rx_sim_cpu).to(device)
+        # Training unico con SNR "infinito" (o None) per retrocompatibilità
+        loss_history_rx_final, beta_global = rx_model.optimize_rx_sequential(
+            H_eff=H_eff, A_target=A_target, max_iters=max_iters, lr=lr, snr_db=None
+        )
+
+        for snr in snr_list:
+            acc = run_evaluation_disjoint_fixed(
+                tx_model=tx_model, rx_model=rx_model, dataloader=dm_task.test_dataloader(), 
+                H_mimo=H_mimo, snr_db=snr, beta_global=beta_global, 
+                L_in=L_in, mu_in=mu_in, L_out=L_out, mu_out=mu_out, 
+                clf=clf, device=device
+            )
+            results[str(snr) if snr is not None else "Inf"] = acc * 100
+
+    return results, loss_history_tx, loss_history_rx_final
 
 
 
@@ -765,41 +788,181 @@ def run_experiment_layers_disjoint(A_target, H_mimo, dm_task, clf, L_in, mu_in, 
     print(f"\n🎯 EXPERIMENT 1 COMPLETED! Data saved to {csv_filename} and {json_filename}")
     return results_layers
 
-def run_experiment_snr_disjoint(A_target, H_mimo, dm_task, clf, L_in, mu_in, L_out, mu_out, device, strategy_name="Linear",seed=42):
+def run_experiment_snr_disjoint(A_target, H_mimo, dm_task, clf, L_in, mu_in, L_out, mu_out, device, strategy_name="Linear", seed=42):
     """
     EXPERIMENT 2 (DISJOINT): Accuracy vs Signal-to-Noise Ratio (SNR).
-    Salvataggio differenziato per strategia (Linear/PPFE) e approccio (Disjoint).
+    Utilizza la regolarizzazione MMSE adattiva per la RX-SIM.
     """
+    import os
+    import json
+    import gc
+
     print("\n" + "="*50)
-    print(f"🚀 STARTING DISJOINT EXP 2: ACCURACY vs SNR | Strategy: {strategy_name}")
+    print(f"🚀 STARTING DISJOINT EXP 2: ACCURACY vs SNR | Strategy: {strategy_name} | Seed: {seed}")
     print("="*50)
     
     L_fixed = 10
-    atoms_list = [16, 32]
+    atoms_list = [32, 64] # Come definito nel tuo snippet originale
     snr_list = [-30, -20, -10, 0, 10, 20, 30]
     
-    results_snr = {}
+    # Prepara nomi file con seed
+    csv_filename = f"final_results_snr_disjoint_{strategy_name}.csv"
+    json_filename = f"results_snr_disjoint_{strategy_name}_seed{seed}.json"
+    
+    if os.path.exists(json_filename):
+        with open(json_filename, "r") as f:
+            results_snr = json.load(f)
+    else:
+        results_snr = {}
+
+    # Dati base per CSV
+    base_run_data = {
+        "Dataset": "CIFAR-10",
+        "Classes": 10,
+        "Seed": seed,
+        "Alignment Type": strategy_name,
+        "Method": "Disjoint",
+        "Iterations": 5000,
+        "Simulation": "DualSIM_Disjoint_MMSE_Adaptive",
+        "SIM Wavelength": 0.005,
+        "SIM Thickness": 0.025, # slayer (0.0025) * L (10)
+    }
 
     for M_int in atoms_list:
         print(f"\n🔄 Testing Config: {M_int}x{M_int} Meta-atoms | L = {L_fixed} (Fixed)")
         
-        # Testiamo la configurazione fissa su tutto il range di SNR
-        acc_dict, _, _ = run_sim_configuration_disjoint(
+        # Chiamata alla configurazione con adaptive_training=True
+        # Restituisce acc_dict con un valore per ogni SNR
+        acc_dict, _, loss_rx = run_sim_configuration_disjoint(
             L=L_fixed, M_int=M_int, A_target=A_target, H_mimo=H_mimo, 
             snr_list=snr_list, dm_task=dm_task, clf=clf, 
             L_in=L_in, mu_in=mu_in, L_out=L_out, mu_out=mu_out, 
-            device=device, max_iters=5000, lr=0.1
+            device=device, max_iters=3000, lr=0.1, seed=seed,
+            adaptive_training=True # <--- ATTIVA LA LOGICA MMSE SPECIFICA PER OGNI SNR
         )
         
         results_snr[f"{M_int}x{M_int}"] = acc_dict
+        final_loss = loss_rx[-1] if loss_rx else 0.0
         
+        # Salviamo sul CSV una riga per ogni livello di SNR testato
         for snr_val, acc_val in acc_dict.items():
             print(f"  - SNR {snr_val:>3} dB : {acc_val:.2f}%")
             
-        # --- SALVATAGGIO DINAMICO ---
-        filename = BASE_DIR / f"results_snr_disjoint_{strategy_name}.json"
-        with open(filename, "w") as f:
+            current_run_data = base_run_data.copy()
+            current_run_data.update({
+                "SIM Layers": L_fixed,
+                "SIM Meta Atoms Intermediate X": M_int,
+                "SIM Meta Atoms Intermediate Y": M_int,
+                "SIM Learning Rate": 0.1,
+                "SIM Training Loss": final_loss,
+                "SNR [dB]": snr_val if snr_val != "Inf" else "",
+                "Accuracy SIM Mimo": acc_val
+            })
+            append_result_to_csv(csv_filename, current_run_data)
+            
+        # --- SALVATAGGIO JSON (Aggiornato dopo ogni M_int) ---
+        with open(json_filename, "w") as f:
             json.dump(results_snr, f, indent=4)
             
-    print(f"\n🎯 EXPERIMENT 2 COMPLETED! Data saved to {filename.name}")
+        # 🧹 PULIZIA MEMORIA
+        gc.collect()
+        torch.cuda.empty_cache()
+            
+    print(f"\n🎯 EXPERIMENT 2 COMPLETED! Data saved to {csv_filename} and {json_filename}")
     return results_snr
+
+
+###################################
+
+
+def run_grid_search_lambda(
+    A_target, H_mimo, dm_task, clf, L_in, mu_in, L_out, mu_out, device, 
+    lambda_candidates=[0.5,1],
+    strategy_name="Linear", seed=42, max_iters_gs=3000
+):
+    """
+    Esegue una Grid Search per trovare il lambda_base ottimale includendo il regime critico a -30 dB.
+    
+    Allineamento:
+    - max_iters_gs è settato a 3000 per replicare esattamente le condizioni 
+      dell'esperimento finale (run_experiment_snr), evitando bias nella scelta di lambda.
+    """
+    import json
+    import gc
+    import torch
+    import numpy as np
+
+    print("\n" + "="*80)
+    print(f"🔬 GRID SEARCH: ADAPTIVE REGULARIZATION (Extended Range) | Strategy: {strategy_name}")
+    print("="*80)
+    
+    # Parametri fissi per la ricerca
+    L_fixed = 10
+    M_int_fixed = 32 
+    # Includiamo i regimi rumorosi per testare la massima robustezza
+    snr_critici = [-30, -20, -10, 0] 
+    base_lr = 0.1
+    
+    gs_results = {}
+    best_lambda = None
+    best_mean_acc = -1.0
+    
+    json_gs_file = f"gs_lambda_{strategy_name}_seed{seed}.json"
+
+    for l_base in lambda_candidates:
+        print(f"\n▶️ Analisi Candidato λ_base: {l_base} (Iterazioni: {max_iters_gs})")
+        
+        # Chiamata con adaptive_training=True per attivare lo scaling 1/SNR nell'optimizer
+        acc_dict, _ = run_sim_configuration(
+            L=L_fixed, M_int=M_int_fixed, A_target=A_target, H_mimo=H_mimo, 
+            snr_list=snr_critici, dm_task=dm_task, clf=clf, 
+            L_in=L_in, mu_in=mu_in, L_out=L_out, mu_out=mu_out, 
+            device=device, max_iters=max_iters_gs, # <-- Allineato a 3000
+            lr=base_lr, seed=seed,
+            lambda_base=l_base,
+            adaptive_training=True 
+        )
+        
+        # Log istantaneo delle performance sui 4 livelli
+        log_str = " | ".join([f"{snr}dB: {acc:.2f}%" for snr, acc in acc_dict.items()])
+        print(f"   📊 Risultati: {log_str}")
+        
+        current_mean_acc = np.mean(list(acc_dict.values()))
+        gs_results[str(l_base)] = {
+            "detailed_acc": acc_dict,
+            "mean_acc": current_mean_acc
+        }
+        
+        if current_mean_acc > best_mean_acc:
+            best_mean_acc = current_mean_acc
+            best_lambda = l_base
+
+        # Salvataggio incrementale
+        with open(json_gs_file, "w") as f:
+            json.dump(gs_results, f, indent=4)
+            
+        # Pulizia memoria aggressiva dopo ogni test
+        del acc_dict
+        gc.collect()
+        torch.cuda.empty_cache()
+
+    # --- TABELLA RIASSUNTIVA FINALE ---
+    print("\n" + "="*85)
+    header = f"{'Candidato λ':<12} | {'-30 dB':<9} | {'-20 dB':<9} | {'-10 dB':<9} | {'0 dB':<9} | {'Media':<9}"
+    print(header)
+    print("-" * 85)
+    
+    for l_val, data in gs_results.items():
+        det = data["detailed_acc"]
+        # Helper robusto per estrarre il valore
+        def gv(k): return det.get(str(k), det.get(k, 0.0))
+        
+        row = (f"{l_val:<12} | {gv(-30):6.2f}%  | {gv(-20):6.2f}%  | "
+               f"{gv(-10):6.2f}%  | {gv(0):6.2f}%  | {data['mean_acc']:6.2f}%")
+        print(row)
+    
+    print("="*85)
+    print(f"🏆 VINCITORE: lambda_base = {best_lambda} con Accuratezza Media = {best_mean_acc:.2f}%")
+    print("="*85 + "\n")
+    
+    return best_lambda, gs_results

@@ -53,19 +53,19 @@ def run_evaluation(model, dataloader, H_mimo, snr_db, beta_opt, L_in, mu_in, L_o
         y_signal = Z_cascade @ x_white 
         
         if snr_db is not None:
-            # Power calculated at the 384 RX antennas
-            sig_at_rx = H_mimo @ G_T @ x_white
-            sigma_v = sigma_given_snr(snr_db, sig_at_rx)
-            
-            # Noise filtered by the receiving SIM meta-surface
-            noise = awgn(sigma_v, y_signal.shape, device=device)
-            y_received = y_signal + (G_R @ noise)
+           sig_at_rx = H_mimo @ G_T @ x_white
+           sigma_v = sigma_given_snr(snr_db, sig_at_rx)
+           noise = awgn(sigma_v, y_signal.shape, device=device)
+    
+        # Applichiamo beta_opt SOLO al segnale, poi aggiungiamo il rumore filtrato
+        # y_received ora contiene già il segnale scalato
+           y_received = (beta_opt * y_signal) + (G_R @ noise) 
         else:
-            y_received = y_signal
+           y_received = beta_opt * y_signal
 
         # 3. RX Side: Scaling + De-whitening (Dimension 384)
         # Reconstruction in the complex latent space [384, Batch]
-        z_hat = (L_out @ (beta_opt * y_received)) + mu_out
+        z_hat = (L_out @ (y_received)) + mu_out
         
         # Decompression: [384 complex, Batch] -> [768 real, Batch]
         # Final transpose to return to [Batch, 768] for the classifier
@@ -77,6 +77,10 @@ def run_evaluation(model, dataloader, H_mimo, snr_db, beta_opt, L_in, mu_in, L_o
         
         all_preds.extend(preds.cpu().numpy())
         all_labels.extend(labels_batch.cpu().numpy())
+
+    p_signal = torch.mean(torch.abs(y_signal)**2)
+    p_noise = torch.mean(torch.abs(G_R @ noise)**2)
+    print(f"SNR REALE: {10 * torch.log10(p_signal/p_noise):.2f} dB")    
 
     accuracy = (np.array(all_preds) == np.array(all_labels)).mean()
     return accuracy

@@ -172,9 +172,10 @@ class MonoSIMoptimizerTorch(nn.Module):
         return loss_history, beta_f.item()
 
 
-    def optimize_rx_sequential(self, H_eff, A_target, max_iters=5000, lr=0.01, lambda_reg=1e-4):
+    def optimize_rx_sequential(self, H_eff, A_target, max_iters=5000, lr=0.1, snr_db=None):
         """
-        Ottimizzazione Sequenziale RX usando Adam. .
+        Ottimizzazione Sequenziale RX con regolarizzazione MMSE adattiva.
+        Mantiene la struttura originale ma bilancia fisicamente il rumore.
         """
         # Fix per il warning PyTorch
         if isinstance(H_eff, torch.Tensor):
@@ -187,36 +188,48 @@ class MonoSIMoptimizerTorch(nn.Module):
         else:
             A_torch = torch.tensor(A_target, dtype=torch.complex64, device=self.xi[0].device)
 
+        # Calcolo varianza del rumore termico
+        sigma_v2 = 10 ** (-snr_db / 10.0) if snr_db is not None else 1e-12
+
         opt = optim.Adam(self.xi.parameters(), lr=lr)
         loss_history = []
 
         for k in range(max_iters):
+            # --- a) Update di beta^k in forma chiusa (Logica MMSE) ---
             with torch.no_grad():
                 G_R = self.get_cascade()
                 Z = G_R @ H_eff_torch
+                
                 num_beta = torch.sum(torch.conj(Z) * A_torch)
-                den_beta = torch.sum(torch.conj(Z) * Z) + 1e-12
+                # Il denominatore ora include la potenza del rumore pesata per G_R
+                den_beta = torch.sum(torch.conj(Z) * Z) + sigma_v2 * (torch.norm(G_R, p='fro')**2) + 1e-12
                 beta_k = num_beta / den_beta
 
+            # --- b) Step di Ottimizzazione Adam ---
             opt.zero_grad()
-            G_R = self.get_cascade()
-            Z_current = G_R @ H_eff_torch
+            G_R_current = self.get_cascade()
+            Z_current = G_R_current @ H_eff_torch
             
-            loss = torch.norm(beta_k * Z_current - A_torch, p='fro')**2
-            if lambda_reg > 0:
-                loss += lambda_reg * torch.norm(G_R, p='fro')**2
+            # Loss 1: Errore di allineamento semantico
+            loss_alignment = torch.norm(beta_k * Z_current - A_torch, p='fro')**2
+            
+            # Loss 2: Potenza del rumore ricevuta (Adattiva)
+            # Viene pesata dal valore corrente di beta^2 e dalla varianza del rumore
+            loss_noise = sigma_v2 * (torch.abs(beta_k)**2) * (torch.norm(G_R_current, p='fro')**2)
+            
+            total_loss = loss_alignment + loss_noise
+            total_loss.backward()
+            opt.step() 
 
-            loss.backward()
-            opt.step() # Adam fa la magia qui
-
+            # Proiezione delle fasi
             with torch.no_grad():
                 for p in self.xi:
                     p.copy_(p % (2 * torch.pi))
 
-            current_loss = loss.item()
+            current_loss = total_loss.item()
             loss_history.append(current_loss)
 
             if k % 500 == 0:
-                print(f"      [Iter {k:4d}/{max_iters}] Eq. Loss: {current_loss:.4e} | Beta Mag: {torch.abs(beta_k).item():.2e}")
+                print(f"      [Iter {k:4d}/{max_iters}] MMSE Loss: {current_loss:.4e} | Beta Mag: {torch.abs(beta_k).item():.2e}")
 
         return loss_history, beta_k.item()

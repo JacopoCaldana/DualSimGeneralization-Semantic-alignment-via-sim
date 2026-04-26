@@ -1492,3 +1492,172 @@ class DualSIMoptimizerTorch(nn.Module):
         return loss_history  
 #########################################################################################
 
+# --- a) Closed-form update for beta^k  ---
+            with torch.no_grad():
+                Z_k, _ = self.get_effective_cascade(H_torch)
+                num_beta = torch.sum(torch.conj(Z_k) * A_torch)
+                den_beta = torch.sum(torch.conj(Z_k) * Z_k) + 1e-12
+                beta_k = num_beta / den_beta
+
+##################
+### OPTIMIZER X DISJOINT SENZA MODIFICHE X LAMDA ADATTIVO °°°° 
+
+
+
+def optimize_rx_sequential(self, H_eff, A_target, max_iters=5000, lr=0.01, lambda_reg=1e-4):
+        """
+        Ottimizzazione Sequenziale RX usando Adam. .
+        """
+        # Fix per il warning PyTorch
+        if isinstance(H_eff, torch.Tensor):
+            H_eff_torch = H_eff.clone().detach().to(self.xi[0].device).to(torch.complex64)
+        else:
+            H_eff_torch = torch.tensor(H_eff, dtype=torch.complex64, device=self.xi[0].device)
+            
+        if isinstance(A_target, torch.Tensor):
+            A_torch = A_target.clone().detach().to(self.xi[0].device).to(torch.complex64)
+        else:
+            A_torch = torch.tensor(A_target, dtype=torch.complex64, device=self.xi[0].device)
+
+        opt = optim.Adam(self.xi.parameters(), lr=lr)
+        loss_history = []
+
+        for k in range(max_iters):
+            with torch.no_grad():
+                G_R = self.get_cascade()
+                Z = G_R @ H_eff_torch
+                num_beta = torch.sum(torch.conj(Z) * A_torch)
+                den_beta = torch.sum(torch.conj(Z) * Z) + 1e-12
+                beta_k = num_beta / den_beta
+
+            opt.zero_grad()
+            G_R = self.get_cascade()
+            Z_current = G_R @ H_eff_torch
+            
+            loss = torch.norm(beta_k * Z_current - A_torch, p='fro')**2
+            if lambda_reg > 0:
+                loss += lambda_reg * torch.norm(G_R, p='fro')**2
+
+            loss.backward()
+            opt.step() # Adam fa la magia qui
+
+            with torch.no_grad():
+                for p in self.xi:
+                    p.copy_(p % (2 * torch.pi))
+
+            current_loss = loss.item()
+            loss_history.append(current_loss)
+
+            if k % 500 == 0:
+                print(f"      [Iter {k:4d}/{max_iters}] Eq. Loss: {current_loss:.4e} | Beta Mag: {torch.abs(beta_k).item():.2e}")
+
+        return loss_history, beta_k.item()    
+
+
+
+
+def run_sim_configuration_disjoint(
+    L, M_int, A_target, H_mimo, snr_list, 
+    dm_task, clf, L_in, mu_in, L_out, mu_out, device, 
+    max_iters=5000, lr=0.1,seed=42
+):
+    wavelength = 0.005  
+    slayer = 5 * wavelength 
+    dx = wavelength / 2 
+
+    tx_sim_cpu = MonoSIMoptimizer(
+        num_layers=L, num_meta_atoms_in_x=16, num_meta_atoms_in_y=12,
+        num_meta_atoms_out_x=24, num_meta_atoms_out_y=16, 
+        num_meta_atoms_int_x=M_int, num_meta_atoms_int_y=M_int,  
+        thickness=slayer * L, wavelength=wavelength, spacings={'in': dx, 'out': dx, 'int': dx}, verbose=False 
+    )
+
+    rx_sim_cpu = MonoSIMoptimizer(
+        num_layers=L, num_meta_atoms_in_x=24, num_meta_atoms_in_y=16,   
+        num_meta_atoms_out_x=24, num_meta_atoms_out_y=16, 
+        num_meta_atoms_int_x=M_int, num_meta_atoms_int_y=M_int,
+        thickness=slayer * L, wavelength=wavelength, spacings={'in': dx, 'out': dx, 'int': dx}, verbose=False 
+    )
+
+    tx_model = MonoSIMoptimizerTorch(tx_sim_cpu).to(device)
+    rx_model = MonoSIMoptimizerTorch(rx_sim_cpu).to(device)
+
+    # --- 1. OTTIMIZZAZIONE TX ---
+    print("   -> Optimizing TX-SIM (Semantic Target)...")
+    loss_history_tx, _ = tx_model.optimize_sim(target_matrix=A_target, max_iters=max_iters, lr=lr)
+
+    # --- 2. OTTIMIZZAZIONE RX (SEQUENZIALE) ---
+    print("   -> Optimizing RX-SIM (Sequential Recovery)...")
+    # Il TX viene congelato e propaga il segnale nel canale
+    with torch.no_grad():
+        G_T_opt = tx_model.get_cascade().cpu().numpy()
+        H_eff = H_mimo.cpu().numpy() @ G_T_opt
+
+    # La RX-SIM viene addestrata per recuperare 'A' guardando il canale distorto
+    loss_history_rx, _ = rx_model.optimize_rx_sequential(
+        H_eff=H_eff, A_target=A_target, max_iters=max_iters, lr=lr, lambda_reg=1e-4
+    )
+
+    # --- 3. RICALIBRAZIONE GLOBALE DEL BETA ---
+    with torch.no_grad():
+        G_R_opt = rx_model.get_cascade().cpu().numpy()
+        Z_final = G_R_opt @ H_mimo.cpu().numpy() @ G_T_opt
+        
+        Z_torch = torch.tensor(Z_final, dtype=torch.complex64, device=device).clone().detach()
+        A_torch = torch.tensor(A_target, dtype=torch.complex64, device=device).clone().detach()
+        beta_global = torch.sum(torch.conj(Z_torch) * A_torch) / (torch.sum(torch.conj(Z_torch) * Z_torch) + 1e-12)
+
+    # --- 4. EVALUATION ---
+    results = {}
+    for snr in snr_list:
+        acc = run_evaluation_disjoint_fixed(
+            tx_model=tx_model, rx_model=rx_model, dataloader=dm_task.test_dataloader(), 
+            H_mimo=H_mimo, snr_db=snr, beta_global=beta_global, 
+            L_in=L_in, mu_in=mu_in, L_out=L_out, mu_out=mu_out, 
+            clf=clf, device=device
+        )
+        snr_key = "Inf" if snr is None else str(snr)
+        results[snr_key] = acc * 100
+
+    return results, loss_history_tx, loss_history_rx
+
+
+
+def run_experiment_snr_disjoint(A_target, H_mimo, dm_task, clf, L_in, mu_in, L_out, mu_out, device, strategy_name="Linear",seed=42):
+    """
+    EXPERIMENT 2 (DISJOINT): Accuracy vs Signal-to-Noise Ratio (SNR).
+    Salvataggio differenziato per strategia (Linear/PPFE) e approccio (Disjoint).
+    """
+    print("\n" + "="*50)
+    print(f"🚀 STARTING DISJOINT EXP 2: ACCURACY vs SNR | Strategy: {strategy_name}")
+    print("="*50)
+    
+    L_fixed = 10
+    atoms_list = [32, 64]
+    snr_list = [-30, -20, -10, 0, 10, 20, 30]
+    
+    results_snr = {}
+
+    for M_int in atoms_list:
+        print(f"\n🔄 Testing Config: {M_int}x{M_int} Meta-atoms | L = {L_fixed} (Fixed)")
+        
+        # Testiamo la configurazione fissa su tutto il range di SNR
+        acc_dict, _, _ = run_sim_configuration_disjoint(
+            L=L_fixed, M_int=M_int, A_target=A_target, H_mimo=H_mimo, 
+            snr_list=snr_list, dm_task=dm_task, clf=clf, 
+            L_in=L_in, mu_in=mu_in, L_out=L_out, mu_out=mu_out, 
+            device=device, max_iters=5000, lr=0.1
+        )
+        
+        results_snr[f"{M_int}x{M_int}"] = acc_dict
+        
+        for snr_val, acc_val in acc_dict.items():
+            print(f"  - SNR {snr_val:>3} dB : {acc_val:.2f}%")
+            
+        # --- SALVATAGGIO DINAMICO ---
+        filename = BASE_DIR / f"results_snr_disjoint_{strategy_name}.json"
+        with open(filename, "w") as f:
+            json.dump(results_snr, f, indent=4)
+            
+    print(f"\n🎯 EXPERIMENT 2 COMPLETED! Data saved to {filename.name}")
+    return results_snr                        
