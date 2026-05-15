@@ -19,7 +19,7 @@ from oracle_test import run_oracle_test
 
 # --- Experiment Execution Functions ---
 from experiment_runner import run_experiment_layers, run_experiment_snr, run_experiment_1_mono_sim, run_sim_configuration_asymmetric,run_experiment_rx_depth,run_experiment_tx_depth, run_experiment_layers_disjoint
-from experiment_runner import run_experiment_layers_disjoint,run_experiment_snr_disjoint, run_grid_search_lambda
+from experiment_runner import run_experiment_layers_disjoint,run_experiment_snr_disjoint, run_grid_search_lambda, run_experiment_slayer_joint
 
 
 
@@ -182,12 +182,12 @@ for current_seed in SEED_LIST:
     #)
 
     # --- EXPERIMENT 2 (DISJOINT): Impact of Signal-to-Noise Ratio (SNR) ---
-    # print(f"\n🚀 Starting Disjoint Experiment 2: SNR Sweep ({ALIGNMENT_TYPE})...")
-    # data_snr_disjoint = run_experiment_snr_disjoint(
-    #     A_target=A_target, H_mimo=H_mimo, dm_task=dm_task, clf=clf, 
-    #     L_in=L_in, mu_in=mu_in, L_out=L_out, mu_out=mu_out, device=device,
-    #     strategy_name=ALIGNMENT_TYPE, seed=current_seed
-    # )
+    #print(f"\n🚀 Starting Disjoint Experiment 2: SNR Sweep ({ALIGNMENT_TYPE})...")
+    #data_snr_disjoint = run_experiment_snr_disjoint(
+     #    A_target=A_target, H_mimo=H_mimo, dm_task=dm_task, clf=clf, 
+      #   L_in=L_in, mu_in=mu_in, L_out=L_out, mu_out=mu_out, device=device,
+       #  strategy_name=ALIGNMENT_TYPE, seed=current_seed
+    #)
 
 
     # ============================================================
@@ -209,14 +209,33 @@ for current_seed in SEED_LIST:
     # ============================================================
 
     # --- GRID SEARCH: Identify Optimal lambda_base (Targeting Low SNR Regimes) ---
-    print(f"\n🔍 Starting Grid Search for Noise Regularization (lambda_base)...")
-    best_l_base, gs_results = run_grid_search_lambda(
-         A_target=A_target, H_mimo=H_mimo, dm_task=dm_task, clf=clf, 
-         L_in=L_in, mu_in=mu_in, L_out=L_out, mu_out=mu_out, device=device,
-         lambda_candidates=[1e-3,1e-2,1e-1,1], # Logarithmic scale sweep
-         strategy_name=ALIGNMENT_TYPE, seed=current_seed
+    #print(f"\n🔍 Starting Grid Search for Noise Regularization (lambda_base)...")
+    #    best_l_base, gs_results = run_grid_search_lambda(
+     #    A_target=A_target, H_mimo=H_mimo, dm_task=dm_task, clf=clf, 
+      #   L_in=L_in, mu_in=mu_in, L_out=L_out, mu_out=mu_out, device=device,
+       #  lambda_candidates=[0.5,1], # Logarithmic scale sweep
+        # strategy_name=ALIGNMENT_TYPE, seed=current_seed
+    #)
+    #print(f"✅ Grid Search Completed. Optimal lambda_base identified: {best_l_base}")
+
+
+    # ============================================================
+# EXPERIMENT: Accuracy vs Inter-Layer Spacing (s_layer)
+# ============================================================
+    print(f"\n🚀 Starting Experiment: s_layer Variation (Strategy: {ALIGNMENT_TYPE})...")
+
+# Esecuzione dell'esperimento (Joint Architecture)
+# Nota: Questa funzione salva automaticamente i risultati in un file .json
+    slayer_results = run_experiment_slayer_joint(
+       A_target=A_target, 
+       H_mimo=H_mimo, 
+       dm_task=dm_task, 
+       clf=clf, 
+       L_in=L_in, mu_in=mu_in, 
+       L_out=L_out, mu_out=mu_out, 
+       device=device, 
+       strategy_name=ALIGNMENT_TYPE, 
+       seeds=[current_seed]
     )
-    print(f"✅ Grid Search Completed. Optimal lambda_base identified: {best_l_base}")
 
-
-   
+    print(f"\n✅ Slayer Experiment Completed.")   

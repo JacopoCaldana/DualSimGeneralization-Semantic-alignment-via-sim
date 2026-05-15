@@ -3,6 +3,7 @@ import torch
 import torch.nn as nn
 from tqdm.auto import tqdm
 import torch.optim as optim
+import math
 
 
 class DualSIMoptimizer:
@@ -330,8 +331,6 @@ class DualSIMoptimizerTorch(nn.Module):
         H_mimo,
         max_iters: int = 3000,
         lr: float = 0.1, 
-        lambda_base: float = 1e-3, # Valore nominale di regolarizzazione 
-        snr_db: float = None,      # SNR in dB per scaling adattivo
         warmup_frac: float = 0.05,
         clip_value: float = 1.0,
         rx_steps_per_tx: int = 2,
@@ -343,7 +342,7 @@ class DualSIMoptimizerTorch(nn.Module):
         import torch.optim as optim
         import math
 
-        print(f"\n⚡ ADAM ENGINE : L={len(self.xi_T)} | lr={lr}")
+        print(f"\n⚡ ADAM ENGINE (Air-SIM Mode) : L={len(self.xi_T)} | lr={lr}")
 
         A_torch = torch.as_tensor(A_target, dtype=torch.complex64)
         H_torch = torch.as_tensor(H_mimo,   dtype=torch.complex64)
@@ -353,16 +352,6 @@ class DualSIMoptimizerTorch(nn.Module):
         H_torch = H_torch.to(device)
 
         A_norm = torch.norm(A_torch, p='fro').item()
-
-        # --- Calcolo Lambda Adattivo ---
-        # Come suggerito, f(sigma^2) = lambda_base * sigma_v^2
-        # Poiché sigma_v^2 = 1 / snr_linear, questo equivale a lambda_base / snr_linear
-        if snr_db is not None and lambda_base > 0:
-            snr_linear = 10 ** (snr_db / 10.0)
-            effective_lambda = lambda_base / (snr_linear + 1e-12)
-            print(f"  [Info] SNR: {snr_db} dB -> effective_lambda = {effective_lambda:.2e}")
-        else:
-            effective_lambda = lambda_base
 
         # 1. Ottimizzatori Adam
         opt_T = optim.Adam(self.xi_T.parameters(), lr=lr, betas=(0.9, 0.999), eps=1e-8)
@@ -381,23 +370,21 @@ class DualSIMoptimizerTorch(nn.Module):
         sched_T = _make_schedulers(opt_T)
         sched_R = _make_schedulers(opt_R)
 
-        # Helper: Esegue uno step di gradiente
-        def _step_side(opt, params, beta_fixed, is_rx=False):
+        # Helper: Esegue uno step di gradiente (Nessuna regolarizzazione!)
+        def _step_side(opt, params, beta_fixed):
             opt.zero_grad()
-            Z, G_R = self.get_effective_cascade(H_torch)
+            
+            # Non ci serve più tracciare G_R singolarmente per la regolarizzazione
+            Z, _ = self.get_effective_cascade(H_torch)
     
             # Loss di allineamento semantico (puramente geometrica)
             loss_J = torch.norm(beta_fixed * Z - A_torch, p='fro') ** 2
-            total = loss_J
             
-            # Se stiamo ottimizzando il ricevitore (RX), aggiungiamo la penalità adattiva fissa
-            if is_rx and effective_lambda > 0:
-               total += effective_lambda * (torch.norm(G_R, p='fro') ** 2)
-        
-            total.backward()
+            loss_J.backward()
             torch.nn.utils.clip_grad_norm_(params, max_norm=clip_value)
             opt.step()
     
+            # Proiezione delle fasi nel range [0, 2π)
             with torch.no_grad():
                 for p in params:
                     p.copy_(p % (2.0 * math.pi))
@@ -412,22 +399,21 @@ class DualSIMoptimizerTorch(nn.Module):
 
         for k in range(max_iters):
 
-            # --- a) Closed-form update for beta^k (Geometric Projection - Baseline) ---
+            # --- a) Closed-form update for beta^k (Geometric Projection) ---
             with torch.no_grad():
                  Z_k, _ = self.get_effective_cascade(H_torch)
                  num_beta = torch.sum(torch.conj(Z_k) * A_torch)
-                 # Denominatore puro senza termine di rumore
                  den_beta = torch.sum(torch.conj(Z_k) * Z_k) + 1e-12
                  beta_k = num_beta / den_beta
 
             # --- b) TX step ---
-            _, _ = _step_side(opt_T, list(self.xi_T.parameters()), beta_k, is_rx=False)
+            _, _ = _step_side(opt_T, list(self.xi_T.parameters()), beta_k)
 
             # --- c) RX step(s) ---
             current_loss = 0.0
             Z_norm_k = 0.0
             for _ in range(rx_steps_per_tx):
-                current_loss, Z_norm_k = _step_side(opt_R, list(self.xi_R.parameters()), beta_k, is_rx=True)
+                current_loss, Z_norm_k = _step_side(opt_R, list(self.xi_R.parameters()), beta_k)
 
             # --- d) Scheduler step ---
             sched_T.step()
@@ -452,15 +438,6 @@ class DualSIMoptimizerTorch(nn.Module):
                     f"|β|: {true_beta:.2e} | "
                     f"‖Z‖: {Z_norm_k:.2e}"
                 )
-
-            # --- g) Early stopping ---
-            #if k >= patience:
-            #    window_start = loss_history[-patience]
-            #    if window_start > 1e-12:
-            #        rel_improvement = (window_start - current_loss) / window_start
-            #        if rel_improvement < rel_tol:
-            #            print(f"  [Early stop @ iter {k}] Δloss/loss = {rel_improvement:.2e} < tol {rel_tol:.2e}")
-            #            break
 
         # 4. Restore best parameters
         with torch.no_grad():

@@ -926,6 +926,363 @@ def plot_ultimate_architecture_comparison_ppfe():
     print(f"✅ Grafico finale salvato in: {save_path}")
 
 
+
+
+
+
+import matplotlib.pyplot as plt
+import seaborn as sns
+import pandas as pd
+import numpy as np
+import json
+from pathlib import Path
+
+def plot_ultimate_comparison_snr(is_disjoint=False):
+    """Confronta Linear vs PPFE usando Seaborn per media e varianza (shading) rispetto all'SNR."""
+    plt.rcParams.update({
+        "figure.figsize": (16, 8),
+        "font.size": 22,
+        "axes.titlesize": 24,
+        "axes.labelsize": 24,
+        "xtick.labelsize": 22,
+        "ytick.labelsize": 22,
+        "legend.fontsize": 18,
+        "legend.title_fontsize": 20,
+        "lines.markersize": 14,
+        "lines.linewidth": 3,
+        "text.usetex": False, # Disattivato per evitare l'errore 'latex not found'
+        "mathtext.fontset": "stix",
+        "font.family": "serif",
+        "font.serif": ["Times New Roman", "Times"]
+    })
+
+    seeds = [27, 42, 123] # Assicurati di usare i seed dei tuoi test
+    strategies = ["Linear", "PPFE"]
+    configs = ["32x32", "64x64"]
+    custom_palette = { "32x32": "#ff7f0e", "64x64": "#2ca02c"}
+
+    # Sceglie il prefisso del file corretto
+    prefix = "results_snr_disjoint" if is_disjoint else "results_snr"
+
+    rows = []
+    for strategy in strategies:
+        for seed in seeds:
+            json_path = Path(f"{prefix}_{strategy}_seed{seed}.json")
+            if not json_path.exists(): 
+                continue
+            
+            with open(json_path, "r") as f:
+                data = json.load(f)
+                
+            for config in configs:
+                if config in data:
+                    for snr_str, acc in data[config].items():
+                        # Saltiamo il caso senza rumore ("Inf") perché non è plottabile su un asse X lineare
+                        if snr_str.lower() == "inf" or snr_str.lower() == "none":
+                            continue
+                            
+                        # PORTIAMO TUTTO IN SCALA 0-100
+                        val = acc if acc > 1 else acc * 100
+                        rows.append({
+                            "SNR": float(snr_str),
+                            "Accuracy": val,
+                            "Config": config,
+                            "Strategy": strategy
+                        })
+    
+    df = pd.DataFrame(rows)
+    if df.empty:
+        print(f"❌ ERRORE: Nessun dato trovato nei file JSON per prefix='{prefix}'!")
+        return
+
+    # CREAZIONE PLOT
+    sns.set_style("whitegrid", {'grid.linestyle': '--', 'grid.alpha': 0.5})
+    fig, ax = plt.subplots()
+
+    # Plot principale (asse X = SNR)
+    sns.lineplot(
+        data=df, x="SNR", y="Accuracy", hue="Config", style="Strategy",
+        palette=custom_palette, markers={'Linear': 'o', 'PPFE': 'X'},
+        dashes={'Linear': '', 'PPFE': (6, 3)}, errorbar='sd', ax=ax
+    )
+
+    # BASELINES (ORACLE) - Anche queste in scala 100
+    try:
+        with open("all_seeds_baselines.json", "r") as f:
+            oracles = json.load(f)
+      # Filtra in modo sicuro solo i seed presenti nell'oracle
+            valid_seeds = [s for s in seeds if str(s) in oracles]
+            
+            if valid_seeds:
+                avg_lin = np.mean([oracles[str(s)]['Linear'] for s in valid_seeds])
+                avg_ppfe = np.mean([oracles[str(s)]['PPFE'] for s in valid_seeds])
+                
+                # Se gli oracle sono 0.95, moltiplichiamo per 100
+                if avg_lin < 1: avg_lin *= 100
+                if avg_ppfe < 1: avg_ppfe *= 100
+                
+                ax.axhline(y=avg_lin, color='gray', ls='-.', lw=1.5, label='Original Linear', alpha=0.6)
+                ax.axhline(y=avg_ppfe, color='gray', ls=':', lw=1.5, label='Original PPFE', alpha=0.6)
+    except FileNotFoundError:
+        print("⚠️ File delle baseline ('all_seeds_baselines.json') non trovato. Le baseline verranno omesse.")
+    except Exception as e:
+        print(f"⚠️ Errore nel caricamento delle baseline: {e}")
+
+    # ESTETICA FINALE
+    arch_type = "Disjoint" if is_disjoint else "Joint"
+    ax.set_title(f'Dual-SIM ({arch_type}) Robustness: Accuracy vs. SNR', pad=25, weight='bold')
+    ax.set_xlabel('Signal-to-Noise Ratio (dB)')
+    ax.set_ylabel('Accuracy (%)')
+    
+    # Limiti per l'asse SNR
+    ax.set_ylim(0, 100) 
+    ax.set_xlim(-30, 30)
+    ax.set_xticks([-30, -20, -10, 0, 10, 20, 30])
+
+    # Spostiamo la legenda fuori a destra per non coprire i dati
+    ax.legend(bbox_to_anchor=(1.02, 1), loc='upper left', borderaxespad=0.)
+
+    plt.tight_layout()
+    out_name = f"plot_ultimate_comparison_snr_{arch_type.lower()}.pdf"
+    plt.savefig(out_name, dpi=300, bbox_inches='tight')
+    plt.show()
+    print(f"✅ Grafico salvato correttamente: {out_name}")    
+
+
+
+
+
+def plot_ultimate_architecture_comparison_snr_ppfe():
+    # --- 1. CONFIGURAZIONE ESTETICA (Times New Roman / Scientific) ---
+    plt.rcParams.update({
+        "figure.figsize": (16, 9),
+        "font.size": 22,
+        "axes.titlesize": 24,
+        "axes.labelsize": 24,
+        "xtick.labelsize": 22,
+        "ytick.labelsize": 22,
+        "legend.fontsize": 18,
+        "legend.title_fontsize": 20,
+        "lines.markersize": 14,
+        "lines.linewidth": 3,
+        "text.usetex": False, 
+        "mathtext.fontset": "stix",
+        "font.family": "serif",
+        "font.serif": ["Times New Roman", "Times"]
+    })
+
+    seeds = [27, 42, 123]
+    configs = ["32x32"] # Focalizzato su 32x32 come da template
+    
+    # Mapping Architetture -> Prefisso File SNR -> Colore
+    arch_map = {
+        "Joint": {"prefix": "results_snr_PPFE", "color": "#1f77b4"},             # Blu
+        "Disjoint": {"prefix": "results_snr_disjoint_PPFE", "color": "#ff7f0e"}, # Arancio
+        "Mono-SIM": {"prefix": "results_snr_monosim_PPFE", "color": "#2ca02c"}   # Verde
+    }
+
+    rows = []
+
+    # --- 2. CARICAMENTO E AGGREGAZIONE DATI ---
+    for arch_name, info in arch_map.items():
+        for seed in seeds:
+            file_path = Path(f"{info['prefix']}_seed{seed}.json")
+            
+            if not file_path.exists():
+                print(f"⚠️ File mancante: {file_path.name}")
+                continue
+                
+            with open(file_path, "r") as f:
+                data = json.load(f)
+            
+            for config in configs:
+                if config in data:
+                    for snr_str, acc in data[config].items():
+                        # Saltiamo il caso "Inf" (assenza di rumore) per il plot lineare
+                        if snr_str.lower() in ["inf", "none"]:
+                            continue
+                            
+                        # Normalizzazione 0-100
+                        val = acc if acc > 1 else acc * 100
+                        rows.append({
+                            "SNR": float(snr_str),
+                            "Accuracy": val,
+                            "Architecture": arch_name,
+                            "Meta-Atoms": config
+                        })
+
+    df = pd.DataFrame(rows)
+    if df.empty:
+        print("❌ Nessun dato trovato! Controlla i nomi dei file .json")
+        return
+
+    # --- 3. CREAZIONE PLOT CON SEABORN ---
+    sns.set_style("whitegrid", {'grid.linestyle': '--', 'grid.alpha': 0.5})
+    fig, ax = plt.subplots()
+
+    # hue="Architecture" -> Cambia Colore
+    # style="Meta-Atoms" -> Cambia Marker e Linea
+    plot = sns.lineplot(
+        data=df, 
+        x="SNR", y="Accuracy", 
+        hue="Architecture", 
+        style="Meta-Atoms",
+        palette={k: v['color'] for k, v in arch_map.items()},
+        markers={'32x32': '^'},
+        dashes={'32x32': (None, None)}, 
+        errorbar='sd', # Sfumatura della deviazione standard
+        ax=ax
+    )
+
+    # --- 4. REFINEMENT ASSI E TITOLI ---
+    ax.set_title('Architecture Comparison: Accuracy vs SNR (PPFE)', pad=25, weight='bold')
+    ax.set_xlabel('Signal-to-Noise Ratio (dB)')
+    ax.set_ylabel('Accuracy (%)')
+    
+    # Range richiesto: 0-100 per l'Accuracy
+    ax.set_ylim(0, 105) 
+    
+    # Range e ticks coerenti con snr_list [-30, -20, -10, 0, 10, 20, 30]
+    ax.set_xlim(-30, 30)
+    ax.set_xticks([-30, -20, -10, 0, 10, 20, 30])
+
+    # Legenda esterna per pulizia
+    ax.legend(bbox_to_anchor=(1.02, 1), loc='upper left', borderaxespad=0.)
+
+    plt.tight_layout()
+    
+    # Salvataggio
+    save_path = "plot_architecture_comparison_snr_PPFE.pdf"
+    plt.savefig(save_path, dpi=300, bbox_inches='tight')
+    plt.show()
+    print(f"✅ Grafico finale salvato in: {save_path}")    
+
+
+
+import matplotlib.pyplot as plt
+import seaborn as sns
+import pandas as pd
+import json
+import numpy as np
+from pathlib import Path
+
+def plot_ultimate_slayer_comparison(strategy_name="PPFE"):
+    """
+    Crea un grafico scientifico che confronta l'accuratezza al variare di s_layer.
+    Asse X: s_layer al TX.
+    Colori (Hue): s_layer al RX.
+    """
+    # --- 1. CONFIGURAZIONE ESTETICA ---
+    plt.rcParams.update({
+        "figure.figsize": (16, 8),
+        "font.size": 22,
+        "axes.titlesize": 24,
+        "axes.labelsize": 24,
+        "xtick.labelsize": 22,
+        "ytick.labelsize": 22,
+        "legend.fontsize": 18,
+        "legend.title_fontsize": 20,
+        "lines.markersize": 14,
+        "lines.linewidth": 3,
+        "text.usetex": False, 
+        "mathtext.fontset": "stix",
+        "font.family": "serif",
+        "font.serif": ["Times New Roman", "Times"]
+    })
+
+    json_path = Path(f"results_slayer_joint_{strategy_name}.json")
+    if not json_path.exists():
+        print(f"❌ ERRORE: File {json_path} non trovato!")
+        return
+
+    with open(json_path, "r") as f:
+        data = json.load(f)
+
+    # --- 2. PARSING E AGGREGAZIONE DATI ---
+    rows = []
+    # Il JSON è strutturato come { seed: { rx_val: { tx_val: acc } } }
+    for seed, rx_dict in data.items():
+        for rx_label, tx_dict in rx_dict.items():
+            # Estraiamo il valore numerico da "rx_4lambda" -> 4
+            rx_val = int(rx_label.split('_')[1].replace('lambda', ''))
+            for tx_str, acc in tx_dict.items():
+                # Conversione in scala 0-100
+                val = acc if acc > 1 else acc * 100
+                rows.append({
+                    "Seed": seed,
+                    "TX s_layer": int(tx_str),
+                    "RX Spacing": f"{rx_val}λ",
+                    "Accuracy": val
+                })
+
+    df = pd.DataFrame(rows)
+    if df.empty:
+        print("❌ ERRORE: Nessun dato trovato nel file JSON!")
+        return
+
+    # --- 3. CREAZIONE PLOT CON SEABORN ---
+    sns.set_style("whitegrid", {'grid.linestyle': '--', 'grid.alpha': 0.5})
+    fig, ax = plt.subplots()
+
+    # Palette colori per i diversi valori di RX s_layer
+    # Usiamo tonalità distinte (Blu, Arancio, Verde) come nello screenshot
+    custom_palette = {"4λ": "#1f77b4", "7λ": "#ff7f0e", "10λ": "#2ca02c"}
+
+    sns.lineplot(
+        data=df, 
+        x="TX s_layer", 
+        y="Accuracy", 
+        hue="RX Spacing", 
+        style="RX Spacing",
+        palette=custom_palette,
+        markers=True, 
+        dashes=False,
+        errorbar='sd', # Shading per la deviazione standard tra i seed
+        ax=ax
+    )
+
+    # --- 4. AGGIUNTA BASELINES (ORACLE) ---
+    # Carichiamo le baseline dal file generale se disponibile
+    try:
+        with open("all_seeds_baselines.json", "r") as f:
+            oracles = json.load(f)
+            # Calcoliamo la media sui seed presenti
+            valid_seeds = [s for s in df["Seed"].unique() if str(s) in oracles]
+            if valid_seeds:
+                avg_val = np.mean([oracles[str(s)][strategy_name] for s in valid_seeds])
+                if avg_val < 1: avg_val *= 100
+                
+                ax.axhline(y=avg_val, color='gray', ls=':', lw=2, label=f'Original {strategy_name}', alpha=0.8)
+                # Esempio per No Mismatch (se presente)
+                # ax.axhline(y=98.0, color='black', ls='-', lw=1.5, label='No Mismatch', alpha=0.5)
+    except:
+        pass
+
+    # --- 5. REFINEMENT ESTETICO ---
+    ax.set_title(f'Dual-SIM Joint: Impact of Inter-Layer Spacing ({strategy_name})', pad=25, weight='bold')
+    ax.set_xlabel(r'Transmit SIM Spacing $s_{\rm layer}$ (TX)')
+    ax.set_ylabel('Accuracy (%)')
+    
+    # Formattazione asse X per mostrare i valori con lambda
+    x_vals = sorted(df["TX s_layer"].unique())
+    ax.set_xticks(x_vals)
+    ax.set_xticklabels([f"{x}λ" for x in x_vals])
+    
+    # Limiti asse Y basati sull'andamento tipico (0.3 - 1.0 nel paper)
+    ax.set_ylim(30, 105) 
+
+    # Posizionamento legenda
+    ax.legend(title=r"$s_{\rm layer}$ at RX", bbox_to_anchor=(1.02, 1), loc='upper left')
+
+    plt.tight_layout()
+    
+    # Salvataggio
+    save_path = f"plot_slayer_variation_{strategy_name}.pdf"
+    plt.savefig(save_path, dpi=300, bbox_inches='tight')
+    plt.show()
+    print(f"✅ Grafico salvato correttamente: {save_path}")    
+
+
 #######################################
 ######################################    
 
@@ -948,6 +1305,9 @@ if __name__ == "__main__":
     plot_ultimate_snr_comparison()
     plot_ultimate_comparison_layers()
     plot_ultimate_architecture_comparison_ppfe()
+    plot_ultimate_comparison_snr()
+    plot_ultimate_architecture_comparison_snr_ppfe()
+    plot_ultimate_slayer_comparison()
 
 
 
