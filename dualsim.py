@@ -264,63 +264,21 @@ class DualSIMoptimizerTorch(nn.Module):
 
     def get_RX_cascade(self):
         """Restituisce la matrice di propagazione G_R della SIM Ricevitore."""
-        return self._calculate_G_R()    
+        return self._calculate_G_R()  
 
-    #def optimize_alternating(self, A_target, H_mimo, max_iters, lr=0.1, lambda_reg=1e-4):
+    def get_effective_cascade_functional(self, H, phases_T, phases_R):
         """
-        Alternating Optimization Algorithm with explicit Beta calculation.
-        Minimizes Frobenius norm error between scaled cascade and target A.
+        Calcola Z = G_R * H * G_T usando vettori di fase forniti dall'esterno.
+        Fondamentale per il forward pass della rete unrolled senza alterare lo stato interno.
         """
-     
-        #A_torch = torch.as_tensor(A_target, dtype=torch.complex64)
-        #H_torch = torch.as_tensor(H_mimo, dtype=torch.complex64)
+        W_T_list = self._get_W_list('W_T', self.L_T)
+        W_R_list = self._get_W_list('W_R', self.L_R)
         
-        #opt_T = optim.Adam(self.xi_T.parameters(), lr=lr)
-       # opt_R = optim.Adam(self.xi_R.parameters(), lr=lr)
+        GT = self._calculate_G(W_T_list, phases_T, self.L_T, W_T_list[0].shape[1])
+        GR = self._calculate_G(W_R_list, phases_R, self.L_R, W_R_list[0].shape[1])
         
-       # loss_history = []
-
-        #for k in tqdm(range(max_iters), disable=not self.verbose, desc="Alternating Optimization"):
-            # --- STEP 1: Update Beta (Closed form) ---
-         #   with torch.no_grad():
-          #      Z_current, _ = self.get_effective_cascade(H_torch)
-                # Compute beta = <Z, A> / <Z, Z>
-           #     beta = torch.sum(torch.conj(Z_current) * A_torch) / torch.sum(torch.conj(Z_current) * Z_current)
-
-            # --- STEP 2: TX Optimization (xi_T) ---
-            #opt_T.zero_grad()
-            #Z_t, _ = self.get_effective_cascade(H_torch)
-            #loss_J_T = torch.norm(beta * Z_t - A_torch, p='fro')**2
-            #loss_J_T.backward()
-            #opt_T.step()
-
-            # --- STEP 3: RX Optimization (xi_R) + Noise Regularization ---
-            #opt_R.zero_grad()
-            #Z_r, GR = self.get_effective_cascade(H_torch)
-           # loss_J_R = torch.norm(beta * Z_r - A_torch, p='fro')**2
-            #loss_N = torch.norm(GR, p='fro')**2  # Regularization to control noise enhancement
-           # total_loss_R = loss_J_R + lambda_reg * loss_N
-            #total_loss_R.backward()
-            #opt_R.step()
-
-            # --- STEP 4: Phase Projection [0, 2*pi) ---
-           # with torch.no_grad():
-           #     for p in self.xi_T: p.copy_(p % (2 * torch.pi))
-            #    for p in self.xi_R: p.copy_(p % (2 * torch.pi))
-
-           # current_loss=loss_J_R.item()
-           # loss_history.append(current_loss)
-            #if k % 50 == 0:
-             #   print(f"      [Iter {k:4d}/{max_iters}] Semantic Loss: {current_loss:.6f}")
-            
-        # --- CALCOLO FINALE ERRORE DI FROBENIUS ---
-        #with torch.no_grad():
-         #   Z_final, _ = self.get_effective_cascade(H_torch)
-          #  beta_f = torch.sum(torch.conj(Z_final) * A_torch) / (torch.sum(torch.conj(Z_final) * Z_final) + 1e-12)
-           # fro_err = torch.norm(beta_f * Z_final - A_torch) / torch.norm(A_torch)
-            #print(f"   🏁 Optimization Done. Final Relative Frobenius Error: {fro_err.item():.4f}\n")
-            
-        #return loss_history
+        Z = GR @ H @ GT
+        return Z      
 
 
 
